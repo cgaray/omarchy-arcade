@@ -39,6 +39,7 @@ Item {
   property int selectedIndex: 0
   property bool cursorActive: false
   property var sessionSettings: ({})
+  property bool helpOpen: false
 
   property var games: []
   property var extensions: []
@@ -83,6 +84,7 @@ Item {
     if (args.settings) root.sessionSettings = args.settings
     root.selectedIndex = 0
     root.cursorActive = true
+    root.helpOpen = false
     root.refresh()
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   }
@@ -157,6 +159,15 @@ Item {
     if (count <= 1) return
     var at = (systemIndex() + delta + count) % count
     root.setSystem(at === 0 ? "" : root.systems[at - 1].system)
+  }
+
+  function jumpSystem(slot) {
+    if (slot === 0) {
+      root.setSystem("")
+      return
+    }
+    if (slot <= root.systems.length)
+      root.setSystem(root.systems[slot - 1].system)
   }
 
   // --- navigation ------------------------------------------------------------
@@ -288,14 +299,39 @@ Item {
             else if (root.systemFilter) root.setSystem("")
             else root.dismiss()
             event.accepted = true
-          } else if (Util.editsFilter(event, root.filterText)) {
-            root.setFilter(Util.editedFilter(event, root.filterText))
-            event.accepted = true
           } else if (event.key === Qt.Key_Tab) {
             root.cycleSystem((event.modifiers & Qt.ShiftModifier) ? -1 : 1)
             event.accepted = true
           } else if (event.key === Qt.Key_F5) {
             root.refresh()
+            event.accepted = true
+          } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) {
+            root.refresh()
+            event.accepted = true
+          } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_Backspace) {
+            root.setFilter("")
+            event.accepted = true
+          } else if ((event.modifiers & Qt.AltModifier)
+                     && event.key >= Qt.Key_0 && event.key <= Qt.Key_9) {
+            root.jumpSystem(event.key === Qt.Key_0 ? 0 : event.key - Qt.Key_0)
+            event.accepted = true
+          } else if (!event.modifiers && event.text === "j") {
+            root.move(0, 1)
+            event.accepted = true
+          } else if (!event.modifiers && event.text === "k") {
+            root.move(0, -1)
+            event.accepted = true
+          } else if (!event.modifiers && event.text === "h") {
+            root.move(-1, 0)
+            event.accepted = true
+          } else if (!event.modifiers && event.text === "l") {
+            root.move(1, 0)
+            event.accepted = true
+          } else if (event.text === "?") {
+            root.helpOpen = !root.helpOpen
+            event.accepted = true
+          } else if (Util.editsFilter(event, root.filterText)) {
+            root.setFilter(Util.editedFilter(event, root.filterText))
             event.accepted = true
           } else if (event.key === Qt.Key_Left) {
             root.move(-1, 0); event.accepted = true
@@ -574,7 +610,7 @@ Item {
             anchors.centerIn: parent
             width: Math.min(parent.width, Style.space(520))
             spacing: Style.space(10)
-             visible: root.visibleGames.length === 0 && !root.scanning
+            visible: root.visibleGames.length === 0 && !root.scanning
 
             Text {
               width: parent.width
@@ -645,11 +681,47 @@ Item {
           id: footer
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
-          text: "↑↓←→ move   ⏎ play or resume   ⇧⏎ start fresh   ⇥ system   F5 rescan   esc close"
+          text: "↑↓←→ / hjkl move   ⏎ resume   ⇧⏎ fresh   ⇥ system   ? help"
           color: root.dim
           opacity: 0.8
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
+        }
+
+      }
+
+      BorderSurface {
+        visible: root.helpOpen
+        z: 20
+        width: Math.min(parent.width, Style.space(760))
+        height: helpContent.implicitHeight + Style.space(24)
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        color: root.background
+        borderSpec: root.borderSpec
+        radius: root.cornerRadius
+
+        Column {
+          id: helpContent
+          anchors.fill: parent
+          anchors.margins: Style.space(12)
+          spacing: Style.space(6)
+
+          Text {
+            text: "Keyboard shortcuts"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            width: parent.width
+            text: "↑↓←→ or hjkl move    Enter resume    Shift+Enter fresh    type search\nTab / Shift+Tab systems    Alt+0 all, Alt+1..9 jump system    F5 or Ctrl+R refresh    Ctrl+Backspace clear    Esc back"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
         }
       }
     }
