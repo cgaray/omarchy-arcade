@@ -491,6 +491,30 @@ Panel {
             }
           }
 
+          Rectangle {
+            id: scanTrack
+            width: parent.width
+            height: Style.space(2)
+            visible: root.scanning
+            color: Util.alpha(root.accent, 0.18)
+            clip: true
+
+            Rectangle {
+              id: scanProgress
+              width: Math.max(Style.space(60), scanTrack.width * 0.28)
+              height: parent.height
+              color: root.accent
+
+              NumberAnimation on x {
+                from: -scanProgress.width
+                to: scanTrack.width
+                duration: 900
+                loops: Animation.Infinite
+                running: root.scanning
+              }
+            }
+          }
+
           // --- Error callout ---------------------------------------------
           BorderSurface {
             visible: root.loadError !== ""

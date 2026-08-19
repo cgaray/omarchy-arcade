@@ -429,6 +429,7 @@ Item {
                   if (root.retroarchMissing) return "RetroArch is not installed"
                   if (root.loadError) return root.loadError
                   if (root.scanning && root.games.length === 0) return "Scanning…"
+                  if (root.scanning) return "Refreshing library…"
                   return root.visibleGames.length
                     + (root.visibleGames.length === 1 ? " game" : " games")
                     + (root.systemFilter ? " · " + root.systemFilter : "")
@@ -437,6 +438,33 @@ Item {
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
+              }
+            }
+
+          }
+
+          Rectangle {
+            id: scanTrack
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: Style.space(2)
+            visible: root.scanning
+            color: Util.alpha(root.accent, 0.18)
+            clip: true
+
+            Rectangle {
+              id: scanProgress
+              width: Math.max(Style.space(80), scanTrack.width * 0.24)
+              height: parent.height
+              color: root.accent
+
+              NumberAnimation on x {
+                from: -scanProgress.width
+                to: scanTrack.width
+                duration: 900
+                loops: Animation.Infinite
+                running: root.scanning
               }
             }
           }
