@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# Launch a game and hold the desktop still while it runs.
+#
+# The launching part is three flags to RetroArch. The part worth having a
+# script for is everything around it: an emulator that takes over the screen
+# should not be interrupted by a notification toast, and should not have the
+# screensaver come down over it during a cutscene. Both are things only
+# something running inside Omarchy can arrange, and both are restored on the
+# way out -- including when the game crashes, which is why the restore runs
+# from a trap rather than the last line.
+
+set -uo pipefail
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-arcade"
+PLAYS_FILE="$STATE_DIR/plays.json"
+
+CORE=""
+ROM=""
+SLOT=""
+SILENCE_NOTIFICATIONS=1
+SUPPRESS_IDLE=1
+
+die() {
+  echo "omarchy-arcade-launch: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<USAGE
+Usage: omarchy-arcade-launch --core <path> --rom <path> [--slot <n|auto>]
+
+Launches a libretro core fullscreen, optionally resuming a save state, with
+notifications silenced and idle suppressed for the duration.
+
+  --core                Absolute path to the libretro core (.so)
+  --rom                 Absolute path to the ROM
+  --slot                Save state slot to resume from: 0-9, or "auto"
+  --keep-notifications  Leave do-not-disturb alone
+  --allow-idle          Leave the screensaver and lock screen alone
+USAGE
+}
+
+while (( $# )); do
+  case "$1" in
+    --core) CORE="${2:-}"; shift 2 ;;
+    --rom)  ROM="${2:-}";  shift 2 ;;
+    --slot) SLOT="${2:-}"; shift 2 ;;
+    --keep-notifications) SILENCE_NOTIFICATIONS=0; shift ;;
+    --allow-idle) SUPPRESS_IDLE=0; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+[[ -n $CORE ]] || { usage >&2; die "--core is required"; }
+[[ -n $ROM ]]  || { usage >&2; die "--rom is required"; }
+[[ -f $CORE ]] || die "core not found: $CORE"
+[[ -f $ROM ]]  || die "ROM not found: $ROM"
+command -v retroarch >/dev/null || die "retroarch is not installed"
+
+# --- Save and restore the desktop ------------------------------------------
+
+# Read the current state before changing it, so a user who was already in DND
+# is still in DND when the game exits. Both reads tolerate a shell that is not
+# running (a game launched from a TTY), in which case there is nothing to
+# restore either.
+PREV_DND=""
+PREV_IDLE=""
+(( SILENCE_NOTIFICATIONS )) && PREV_DND=$(omarchy-shell -q notifications dndState 2>/dev/null | tr -d '[:space:]')
+(( SUPPRESS_IDLE )) && PREV_IDLE=$(omarchy-toggle-idle status 2>/dev/null | jq -r '.enabled // false' 2>/dev/null)
+
+restore_desktop() {
+  # Only undo what we actually changed. A user who was already in
+  # do-not-disturb before launching stays in it afterwards.
+  [[ $PREV_DND == "false" ]] && omarchy-shell -q notifications setDnd false >/dev/null 2>&1
+  [[ $PREV_IDLE == "false" ]] && omarchy-toggle-idle allow-idle >/dev/null 2>&1
+  omarchy-shell -q omarchy.indicators refresh >/dev/null 2>&1
+  return 0
+}
+trap restore_desktop EXIT INT TERM
+
+(( SILENCE_NOTIFICATIONS )) && omarchy-shell -q notifications setDnd true >/dev/null 2>&1
+(( SUPPRESS_IDLE )) && omarchy-toggle-idle stay-awake >/dev/null 2>&1
+omarchy-shell -q omarchy.indicators refresh >/dev/null 2>&1
+
+# --- Build the RetroArch invocation ----------------------------------------
+
+args=(-L "$CORE" "$ROM" --fullscreen)
+appendcfg=""
+
+case "$SLOT" in
+  "")
+    ;;
+  auto)
+    # The auto state is the one slot `--entryslot` cannot name, so ask for it
+    # the only other way RetroArch offers: a config fragment layered on top of
+    # the user's own, which leaves retroarch.cfg untouched.
+    appendcfg=$(mktemp -t arcade-resume-XXXXXX.cfg) || die "could not create temp config"
+    printf 'savestate_auto_load = "true"\n' >"$appendcfg"
+    args+=(--appendconfig "$appendcfg")
+    ;;
+  [0-9])
+    args+=(--entryslot "$SLOT")
+    ;;
+  *)
+    die "invalid --slot: $SLOT (expected 0-9 or auto)"
+    ;;
+esac
+
+cleanup_cfg() { [[ -n $appendcfg && -f $appendcfg ]] && rm -f "$appendcfg"; }
+trap 'cleanup_cfg; restore_desktop' EXIT INT TERM
+
+# --- Play -------------------------------------------------------------------
+
+started=$(date +%s)
+retroarch "${args[@]}"
+status=$?
+ended=$(date +%s)
+
+# --- Record the session -----------------------------------------------------
+
+# Keyed by ROM path, matching the scanner's `key`. Written through a temp file
+# so an interrupted write cannot leave a truncated plays.json behind, which
+# would silently reset every playtime the user has accumulated.
+mkdir -p "$STATE_DIR"
+[[ -f $PLAYS_FILE ]] || echo '{}' >"$PLAYS_FILE"
+
+tmp=$(mktemp -t arcade-plays-XXXXXX.json) || exit "$status"
+if jq \
+  --arg key "$ROM" \
+  --argjson lastPlayed "$ended" \
+  --argjson seconds "$(( ended - started ))" \
+  '.[$key] = {
+     lastPlayed: $lastPlayed,
+     seconds: ((.[$key].seconds // 0) + $seconds),
+     count: ((.[$key].count // 0) + 1)
+   }' "$PLAYS_FILE" >"$tmp" 2>/dev/null; then
+  mv -f "$tmp" "$PLAYS_FILE"
+else
+  rm -f "$tmp"
+fi
+
+exit "$status"

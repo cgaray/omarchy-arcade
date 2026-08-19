@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "id": "io.garay.arcade",
+  "name": "Arcade",
+  "version": "0.1.0",
+  "author": "Christopher Garay",
+  "license": "MIT",
+  "description": "Your games in the Omarchy bar, each one showing the frame you paused on. Enter picks up exactly where you left off.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Arcade",
+    "description": "Resume a RetroArch save state from the bar, with the frame you paused on as the thumbnail. Notifications and the screensaver stay out of the way while you play.",
+    "category": "Gaming",
+    "aliases": ["arcade", "games", "retroarch", "emulator", "roms"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "maxLibraryRows": 40,
+      "silenceNotifications": true,
+      "stayAwake": true,
+      "romDir": ""
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Rescan interval (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300,
+        "description": "How often the library is rebuilt in the background. Opening the panel always rescans, so this only affects the count shown in the bar."
+      },
+      {
+        "key": "maxLibraryRows",
+        "type": "integer",
+        "label": "Maximum library rows",
+        "min": 10,
+        "max": 500,
+        "step": 10,
+        "defaultValue": 40,
+        "description": "Caps rendered rows. Search still looks through the whole library."
+      },
+      {
+        "key": "silenceNotifications",
+        "type": "boolean",
+        "label": "Silence notifications while playing",
+        "defaultValue": true,
+        "description": "Enables do-not-disturb for the length of the game, then restores whatever it was before."
+      },
+      {
+        "key": "stayAwake",
+        "type": "boolean",
+        "label": "Suppress idle while playing",
+        "defaultValue": true,
+        "description": "Keeps the screensaver and lock screen away during long cutscenes, then restores your idle setting."
+      },
+      {
+        "key": "romDir",
+        "type": "string",
+        "label": "ROM folder",
+        "defaultValue": "",
+        "description": "Leave empty to use RetroArch's own browser directory (~/Games/roms on a stock Omarchy install)."
+      }
+    ]
+  }
+}

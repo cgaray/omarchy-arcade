@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# Checks the bar-widget contract that has no compile-time enforcement.
+#
+# qmllint cannot help here: a file whose root type comes from qs.Ui (Panel)
+# is unresolvable without Quickshell's type information, so qmllint exits
+# non-zero on every bar widget including the first-party ones. What it would
+# not have caught anyway is the contract below -- the shell loads a widget
+# missing any of it without a single warning, and it renders as a gap in the
+# bar. Each check here is a bug that actually happened.
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$HERE/.."
+MANIFEST="$ROOT/manifest.json"
+
+failures=0
+passed=0
+
+check() {
+  local name="$1" expected="$2" actual="$3"
+  if [[ $expected == "$actual" ]]; then
+    passed=$((passed + 1))
+  else
+    echo "FAIL: $name"
+    echo "  expected: $expected"
+    echo "  actual:   $actual"
+    failures=$((failures + 1))
+  fi
+}
+
+ENTRY=$(jq -r '.entryPoints.barWidget // ""' "$MANIFEST")
+check "the manifest names a barWidget entry point" "Panel.qml" "$ENTRY"
+
+check "the entry point exists" "yes" "$([[ -f $ROOT/$ENTRY ]] && echo yes || echo no)"
+
+check "the manifest declares the bar-widget kind" \
+  "true" "$(jq '(.kinds | index("bar-widget")) != null' "$MANIFEST")"
+
+# A bar-widget id that is not also in barWidget.displayName territory shows up
+# in the bar settings list with no name at all.
+check "the widget has a display name" \
+  "true" "$(jq '((.barWidget.displayName // "") | length) > 0' "$MANIFEST")"
+
+check "every settings key has a default" \
+  "true" "$(jq '[.barWidget.schema[].key] - [.barWidget.defaults | keys[]] | length == 0' "$MANIFEST")"
+
+PANEL="$ROOT/$ENTRY"
+
+check "the root type is Ui.Panel" \
+  "1" "$(grep -cE '^Panel \{' "$PANEL")"
+
+# The bar sizes each slot from its widget's implicit size. A root that reports
+# nothing collapses the slot to zero width, and the widget silently renders as
+# a gap -- no warning, no error, nothing in the log.
+check "the root forwards implicitWidth from the bar button" \
+  "1" "$(grep -cE '^\s*implicitWidth: button\.implicitWidth' "$PANEL")"
+
+check "the root forwards implicitHeight from the bar button" \
+  "1" "$(grep -cE '^\s*implicitHeight: button\.implicitHeight' "$PANEL")"
+
+check "there is a bar button with that id" \
+  "1" "$(grep -cE '^\s*id: button' "$PANEL")"
+
+# manageIpc:false hands the IpcHandler to us; forgetting to write one leaves
+# `omarchy-shell io.garay.arcade toggle` answering "Target not found".
+if grep -qE '^\s*manageIpc: false' "$PANEL"; then
+  check "manageIpc:false is paired with an IpcHandler" \
+    "1" "$(grep -cE '^\s*IpcHandler \{' "$PANEL")"
+  check "the IpcHandler target matches the plugin id" \
+    "1" "$(grep -cE "^\s*target: \"$(jq -r .id "$MANIFEST")\"" "$PANEL")"
+fi
+
+# Both helper scripts are spawned by path from the panel, so a rename that
+# misses one is a button that does nothing.
+for script in omarchy-arcade-scan omarchy-arcade-launch; do
+  check "$script is referenced by the panel" \
+    "true" "$(grep -qF "$script" "$PANEL" && echo true || echo false)"
+  check "$script is executable" \
+    "true" "$([[ -x $ROOT/bin/$script ]] && echo true || echo false)"
+done
+
+if (( failures )); then
+  echo "panel-contract-test: $passed passed, $failures failed"
+  exit 1
+fi
+echo "panel-contract-test: $passed passed"
