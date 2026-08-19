@@ -123,15 +123,11 @@ Item {
     var derived = Session.rebuild(root.games, root.filterText, root.systemFilter, 2000, 0)
     root.systemFilter = derived.systemFilter
     root.visibleGames = derived.libraryRows
-    var out = derived.libraryRows
-
-    tileModel.clear()
-    for (var j = 0; j < out.length; j++) tileModel.append({ gameIndex: j })
-
-    if (root.selectedIndex >= tileModel.count) root.selectedIndex = Math.max(0, tileModel.count - 1)
+    if (root.selectedIndex >= root.visibleGames.length)
+      root.selectedIndex = Math.max(0, root.visibleGames.length - 1)
     if (root.selectedIndex < 0) root.selectedIndex = 0
     Qt.callLater(function () {
-      if (tileModel.count > 0) grid.positionViewAtIndex(root.selectedIndex, GridView.Contain)
+      if (root.visibleGames.length > 0) grid.positionViewAtIndex(root.selectedIndex, GridView.Contain)
     })
   }
 
@@ -170,17 +166,17 @@ Item {
   }
 
   function move(deltaX, deltaY) {
-    if (tileModel.count === 0) return
+    if (root.visibleGames.length === 0) return
     root.cursorActive = true
     var next = root.selectedIndex + deltaX + deltaY * root.columns()
     if (next < 0) next = 0
-    if (next >= tileModel.count) next = tileModel.count - 1
+    if (next >= root.visibleGames.length) next = root.visibleGames.length - 1
     root.selectedIndex = next
     grid.positionViewAtIndex(next, GridView.Contain)
   }
 
   function movePage(delta) {
-    if (tileModel.count === 0) return
+    if (root.visibleGames.length === 0) return
     var rows = Math.max(1, Math.floor(grid.height / root.tileHeight))
     root.move(0, delta * rows)
   }
@@ -233,8 +229,6 @@ Item {
     repeat: true
     onTriggered: if (!watchProcess.running && !root.scanning) watchProcess.running = true
   }
-
-  ListModel { id: tileModel }
 
   Process {
     id: scanProcess
@@ -318,7 +312,7 @@ Item {
           } else if (event.key === Qt.Key_Home) {
             root.selectedIndex = 0; grid.positionViewAtBeginning(); event.accepted = true
           } else if (event.key === Qt.Key_End) {
-            root.selectedIndex = Math.max(0, tileModel.count - 1)
+            root.selectedIndex = Math.max(0, root.visibleGames.length - 1)
             grid.positionViewAtEnd(); event.accepted = true
           } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.activate(!(event.modifiers & Qt.ShiftModifier))
@@ -452,17 +446,19 @@ Item {
           GridView {
             id: grid
             anchors.fill: parent
-            model: tileModel
+            model: root.visibleGames
             clip: true
             cellWidth: root.tileWidth
             cellHeight: root.tileHeight
+            reuseItems: true
             boundsBehavior: Flickable.StopAtBounds
-            visible: tileModel.count > 0
+            visible: root.visibleGames.length > 0
 
             delegate: Item {
               id: tile
               required property int index
-              readonly property var game: root.visibleGames[index] || null
+              required property var modelData
+              readonly property var game: modelData || null
               readonly property bool hasCursor: root.cursorActive && index === root.selectedIndex
 
               width: root.tileWidth
@@ -578,7 +574,7 @@ Item {
             anchors.centerIn: parent
             width: Math.min(parent.width, Style.space(520))
             spacing: Style.space(10)
-            visible: tileModel.count === 0 && !root.scanning
+             visible: root.visibleGames.length === 0 && !root.scanning
 
             Text {
               width: parent.width

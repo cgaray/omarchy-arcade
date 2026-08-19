@@ -467,13 +467,14 @@ Panel {
             title: "Arcade"
             meta: {
               if (root.retroarchMissing) return "RetroArch is not installed"
-              if (root.scanning && root.games.length === 0) return "Scanning your library…"
+               if (root.scanning && root.games.length === 0) return "Scanning your library…"
               if (root.loadError) return root.loadError
               if (root.games.length === 0) return "No games found"
               var parts = [root.games.length + (root.games.length === 1 ? " game" : " games")]
               var resumable = Library.resumableGames(root.games, 999).length
               if (resumable > 0) parts.push(resumable + " to continue")
-              if (root.playing) parts.push("playing now")
+               if (root.scanning) parts.push("refreshing")
+               if (root.playing) parts.push("playing now")
               return parts.join(" · ")
             }
             foreground: root.foreground
