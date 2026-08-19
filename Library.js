@@ -39,7 +39,9 @@ function parseLibrary(raw) {
       resumeSlot: String(g.resumeSlot || ""),
       resumeArt: String(g.resumeArt || ""),
       resumeAt: Number(g.resumeAt || 0),
-      lastPlayed: Number(g.lastPlayed || 0)
+      lastPlayed: Number(g.lastPlayed || 0),
+      playSeconds: Number(g.playSeconds || 0),
+      playCount: Number(g.playCount || 0)
     })
   }
 
@@ -302,6 +304,31 @@ function choosableExtensions(extensions) {
   return out
 }
 
+// Playtime, at the resolution someone actually cares about: minutes below an
+// hour, whole hours above it. "1h 5m" rather than "1:05:32".
+function formatDuration(seconds) {
+  var total = Math.max(0, Math.floor(Number(seconds || 0)))
+  if (total < 60) return total + "s"
+  var minutes = Math.floor(total / 60)
+  if (minutes < 60) return minutes + "m"
+  var hours = Math.floor(minutes / 60)
+  var rest = minutes % 60
+  return rest ? (hours + "h " + rest + "m") : (hours + "h")
+}
+
+// The line under an expanded row: what has happened with this game, or an
+// honest admission that nothing has.
+function playSummary(game, nowSeconds) {
+  if (!game) return ""
+  if (!game.playCount) return "Never played"
+
+  var bits = [formatDuration(game.playSeconds)]
+  bits.push(game.playCount === 1 ? "1 session" : (game.playCount + " sessions"))
+  var ago = formatAgo(game.lastPlayed, nowSeconds)
+  if (ago) bits.push("last " + ago)
+  return bits.join(" · ")
+}
+
 function formatAgo(epochSeconds, nowSeconds) {
   var then = Number(epochSeconds || 0)
   if (then <= 0) return ""
@@ -328,6 +355,8 @@ if (typeof module !== "undefined" && module.exports) {
     subsequenceScore: subsequenceScore,
     filterGames: filterGames,
     resumableGames: resumableGames,
-    formatAgo: formatAgo
+    formatAgo: formatAgo,
+    formatDuration: formatDuration,
+    playSummary: playSummary
   }
 }

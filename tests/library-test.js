@@ -43,7 +43,9 @@ const game = (over) =>
       resumeSlot: "",
       resumeArt: "",
       resumeAt: 0,
-      lastPlayed: 0
+      lastPlayed: 0,
+      playSeconds: 0,
+      playCount: 0
     },
     over || {}
   )
@@ -323,6 +325,39 @@ test("an extension several cores claim is undecided until it is chosen", () => {
 
 test("a decided extension is still choosable, so it can be changed back", () => {
   assert.strictEqual(Library.choosableExtensions([ext({ chosen: "snes9x" })]).length, 1)
+})
+
+// --- playtime ---------------------------------------------------------------
+
+test("formatDuration reads at the resolution people care about", () => {
+  assert.strictEqual(Library.formatDuration(0), "0s")
+  assert.strictEqual(Library.formatDuration(46), "46s")
+  assert.strictEqual(Library.formatDuration(600), "10m")
+  assert.strictEqual(Library.formatDuration(3600), "1h")
+  assert.strictEqual(Library.formatDuration(3900), "1h 5m")
+})
+
+test("a game never launched says so rather than showing zeroes", () => {
+  assert.strictEqual(Library.playSummary(game(), 1_750_000_000), "Never played")
+})
+
+test("playSummary reads as a sentence", () => {
+  const now = 1_750_000_000
+  const g = game({ playSeconds: 3900, playCount: 3, lastPlayed: now - 7200 })
+  assert.strictEqual(Library.playSummary(g, now), "1h 5m · 3 sessions · last 2h ago")
+})
+
+test("one session is not pluralised", () => {
+  const now = 1_750_000_000
+  const g = game({ playSeconds: 60, playCount: 1, lastPlayed: now - 60 })
+  assert.ok(Library.playSummary(g, now).indexOf("1 session ") >= 0)
+})
+
+test("parseLibrary carries playtime through", () => {
+  const raw = JSON.stringify({ games: [game({ playSeconds: 120, playCount: 2 })] })
+  const g = Library.parseLibrary(raw).games[0]
+  assert.strictEqual(g.playSeconds, 120)
+  assert.strictEqual(g.playCount, 2)
 })
 
 // --- formatAgo --------------------------------------------------------------

@@ -49,6 +49,22 @@ Panel {
   property bool cursorActive: false
   property int cursorIndex: 0
 
+  // Tab walks the panel's three landing places in the order they are drawn:
+  // the search box, the system row, then the games. Zones that are not on
+  // screen -- no search box before anything is scanned, no system row in a
+  // single-system library -- drop out of the cycle rather than becoming a
+  // Tab press that appears to do nothing.
+  property string focusZone: "list"
+  property int systemCursor: 0
+
+  readonly property var focusZones: {
+    var out = []
+    if (search.visible) out.push("search")
+    if (systemStrip.visible) out.push("systems")
+    out.push("list")
+    return out
+  }
+
   readonly property int maxLibraryRows: Math.max(10, root.setting("maxLibraryRows", 40))
   readonly property int refreshIntervalSec: Math.max(30, root.setting("refreshIntervalSec", 300))
 
@@ -68,6 +84,23 @@ Panel {
 
   function targetKey(kind, game) { return kind + ":" + (game ? game.key : "") }
   function selectedKey() { return selectedTarget ? targetKey(selectedTarget.kind, selectedTarget.game) : "" }
+
+  // A Column inside a Flickable does no scrolling of its own, so walking the
+  // cursor past the fold used to move a selection nobody could see. Ask the
+  // row where it ended up and bring it back into view.
+  function ensureVisible(item) {
+    if (!item || !panelFlick) return
+    Qt.callLater(function () {
+      var top = item.mapToItem(panelFlick.contentItem, 0, 0).y
+      var bottom = top + item.height
+      var margin = Style.space(10)
+      var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+      if (top < panelFlick.contentY + margin)
+        panelFlick.contentY = Math.max(0, top - margin)
+      else if (bottom > panelFlick.contentY + panelFlick.height - margin)
+        panelFlick.contentY = Math.min(maxY, bottom + margin - panelFlick.height)
+    })
+  }
 
   function moveCursor(delta) {
     cursorActive = true
@@ -114,9 +147,54 @@ Panel {
     root.rebuild()
   }
 
+  function enterZone(zone) {
+    root.focusZone = zone
+    if (zone === "search") {
+      Qt.callLater(function () { search.forceActiveFocus() })
+      return
+    }
+    if (zone === "systems") {
+      // Land on whichever chip is currently in force, so Tab into the row
+      // does not silently move the selection.
+      root.systemCursor = root.systemIndexOf(root.systemFilter)
+    }
+    if (zone === "list") root.cursorActive = true
+    Qt.callLater(function () { keyCatcher.forceActiveFocus() })
+  }
+
+  function cycleZone(delta) {
+    var zones = root.focusZones
+    var at = zones.indexOf(root.focusZone)
+    if (at < 0) at = zones.length - 1
+    root.enterZone(zones[(at + delta + zones.length) % zones.length])
+  }
+
+  // Index into the chip row, All being 0.
+  function systemIndexOf(system) {
+    if (!system) return 0
+    for (var i = 0; i < root.systems.length; i++)
+      if (root.systems[i].system === system) return i + 1
+    return 0
+  }
+
+  function systemAt(index) {
+    if (index <= 0) return ""
+    return root.systems[index - 1] ? root.systems[index - 1].system : ""
+  }
+
+  // Moving along the chip row applies as it goes, so the list below is always
+  // showing what the highlighted chip means.
+  function moveSystemCursor(delta) {
+    var count = root.systems.length + 1
+    if (count <= 1) return
+    root.systemCursor = Math.max(0, Math.min(count - 1, root.systemCursor + delta))
+    root.setSystem(root.systemAt(root.systemCursor))
+  }
+
   function setSystem(system) {
     root.systemFilter = system
     root.cursorIndex = 0
+    root.systemCursor = root.systemIndexOf(system)
     root.rebuild()
     Qt.callLater(function () { panelFlick.contentY = 0 })
   }
@@ -124,12 +202,10 @@ Panel {
   // "s" walks the filter row, All included, so the whole library stays
   // reachable from the keyboard without hunting for the chip.
   function cycleSystem(delta) {
-    if (root.systems.length === 0) return
-    var ids = [""]
-    for (var i = 0; i < root.systems.length; i++) ids.push(root.systems[i].system)
-    var at = ids.indexOf(root.systemFilter)
-    if (at < 0) at = 0
-    root.setSystem(ids[(at + delta + ids.length) % ids.length])
+    var count = root.systems.length + 1
+    if (count <= 1) return
+    var at = root.systemIndexOf(root.systemFilter)
+    root.setSystem(root.systemAt((at + delta + count) % count))
   }
 
   // `resume` is what Enter means everywhere in this panel; Shift+Enter and the
@@ -161,6 +237,8 @@ Panel {
       root.setQuery("")
       root.cursorActive = false
       root.cursorIndex = 0
+      root.focusZone = "list"
+      root.systemCursor = root.systemIndexOf(root.systemFilter)
       root.refresh()
     }
   }
@@ -276,15 +354,30 @@ Panel {
       anchors.fill: parent
       blocked: search.activeFocus || root.dropdownOpen
 
-      onMoveRequested: function (dx, dy) { if (dy !== 0) root.moveCursor(dy) }
-      onActivateRequested: root.activateCursor(true)
+      onMoveRequested: function (dx, dy) {
+        if (root.focusZone === "systems") {
+          if (dx !== 0) root.moveSystemCursor(dx)
+          // Down out of the chip row is the natural way into the games.
+          else if (dy > 0) root.enterZone("list")
+          else if (dy < 0 && search.visible) root.enterZone("search")
+          return
+        }
+        if (dy !== 0) root.moveCursor(dy)
+      }
+      onActivateRequested: {
+        // The chip already applied as the cursor passed over it, so Enter
+        // means "done choosing" rather than "choose".
+        if (root.focusZone === "systems") root.enterZone("list")
+        else root.activateCursor(true)
+      }
       onCloseRequested: {
         if (root.query) root.setQuery("")
+        else if (root.systemFilter) root.setSystem("")
         else root.close()
       }
-      onTabRequested: Qt.callLater(function () { search.forceActiveFocus() })
+      onTabRequested: function (direction) { root.cycleZone(direction) }
       onTextKey: function (text) {
-        if (text === "/") Qt.callLater(function () { search.forceActiveFocus() })
+        if (text === "/") root.enterZone("search")
         else if (text === "r" || text === "R") root.refresh()
         else if (text === "f" || text === "F") root.activateCursor(false)
         else if (text === "s") root.cycleSystem(1)
@@ -369,14 +462,17 @@ Panel {
             foreground: root.foreground
             font.family: root.fontFamily
             onTextChanged: if (text !== root.query) root.setQuery(text)
-            Keys.onDownPressed: { keyCatcher.forceActiveFocus(); root.moveCursor(1) }
+            Keys.onTabPressed: root.cycleZone(1)
+            Keys.onBacktabPressed: root.cycleZone(-1)
+            Keys.onDownPressed: {
+              root.enterZone(root.focusZones.length > 1 && systemStrip.visible ? "systems" : "list")
+            }
             Keys.onEscapePressed: {
               if (root.query) root.setQuery("")
               keyCatcher.forceActiveFocus()
             }
             Keys.onReturnPressed: {
-              keyCatcher.forceActiveFocus()
-              root.cursorActive = true
+              root.enterZone("list")
               root.activateCursor(true)
             }
           }
@@ -385,6 +481,7 @@ Panel {
           // Only worth showing once there is more than one system to move
           // between; a single-system library is already filtered.
           Flickable {
+            id: systemStrip
             width: parent.width
             visible: root.systems.length > 1 && !root.retroarchMissing
             height: visible ? systemRow.implicitHeight : 0
@@ -401,27 +498,30 @@ Panel {
               Button {
                 text: "All · " + root.games.length
                 selected: root.systemFilter === ""
+                hasCursor: root.focusZone === "systems" && root.systemCursor === 0
                 bordered: true
                 foreground: root.foreground
                 accent: root.accent
                 fontFamily: root.fontFamily
                 fontSize: Style.font.caption
-                onClicked: root.setSystem("")
+                onClicked: { root.focusZone = "systems"; root.setSystem("") }
               }
 
               Repeater {
                 model: root.systems
 
                 Button {
+                  required property int index
                   required property var modelData
                   text: modelData.label + " · " + modelData.count
                   selected: root.systemFilter === modelData.system
+                  hasCursor: root.focusZone === "systems" && root.systemCursor === index + 1
                   bordered: true
                   foreground: root.foreground
                   accent: root.accent
                   fontFamily: root.fontFamily
                   fontSize: Style.font.caption
-                  onClicked: root.setSystem(modelData.system)
+                  onClicked: { root.focusZone = "systems"; root.setSystem(modelData.system) }
                 }
               }
             }
@@ -452,12 +552,15 @@ Panel {
                 required property int index
                 required property var modelData
                 readonly property bool hasCursor:
-                  root.cursorActive && root.selectedKey() === root.targetKey("continue", modelData)
+                  root.cursorActive && root.focusZone === "list"
+                  && root.selectedKey() === root.targetKey("continue", modelData)
 
                 width: parent.width
                 height: Style.space(58)
                 radius: Style.cornerRadius
                 color: hasCursor ? Style.selectedFill : (rowHover.containsMouse ? Style.hoverFill : "transparent")
+
+                onHasCursorChanged: if (hasCursor) root.ensureVisible(continueRow)
 
                 Row {
                   anchors.fill: parent
@@ -551,6 +654,7 @@ Panel {
                   acceptedButtons: Qt.LeftButton | Qt.RightButton
                   onContainsMouseChanged: if (containsMouse) {
                     root.cursorActive = true
+                    root.focusZone = "list"
                     root.cursorIndex = continueRow.index
                   }
                   // Right-click is the mouse's way of saying "from the top",
@@ -596,26 +700,44 @@ Panel {
                 required property int index
                 required property var modelData
                 readonly property bool hasCursor:
-                  root.cursorActive && root.selectedKey() === root.targetKey("library", modelData)
+                  root.cursorActive && root.focusZone === "list"
+                  && root.selectedKey() === root.targetKey("library", modelData)
 
                 width: parent.width
-                height: Style.space(38)
+                // The row grows under the cursor to show what it knows about
+                // the game -- playtime, and whether there is a save to come
+                // back to. Only the focused row pays for the space, so a
+                // hundred-game library still reads as a list.
+                height: hasCursor ? Style.space(62) : Style.space(38)
                 radius: Style.cornerRadius
                 color: hasCursor ? Style.selectedFill : (libHover.containsMouse ? Style.hoverFill : "transparent")
+                clip: true
+
+                Behavior on height {
+                  NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
+                }
+
+                onHasCursorChanged: if (hasCursor) root.ensureVisible(libraryRow)
 
                 Row {
                   anchors.fill: parent
                   anchors.leftMargin: Style.space(8)
                   anchors.rightMargin: Style.space(10)
+                  anchors.topMargin: Style.space(6)
+                  anchors.bottomMargin: Style.space(6)
                   spacing: Style.space(8)
 
                   Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Style.space(26)
-                    height: Style.space(26)
+                    anchors.top: parent.top
+                    width: libraryRow.hasCursor ? Style.space(48) : Style.space(26)
+                    height: width
                     radius: Style.cornerRadius
                     color: Util.alpha(root.foreground, 0.08)
                     clip: true
+
+                    Behavior on width {
+                      NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
+                    }
 
                     Image {
                       id: boxart
@@ -640,8 +762,9 @@ Panel {
                   // on the right it competed with the title for the same
                   // width and lost, eliding to "Nintendo - Sup...".
                   Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - Style.space(26) - Style.space(8) * 2 - resumeDot.width
+                    anchors.top: parent.top
+                    width: parent.width - (libraryRow.hasCursor ? Style.space(48) : Style.space(26))
+                           - Style.space(8) * 2 - resumeDot.width
                     spacing: Style.space(1)
 
                     Text {
@@ -664,13 +787,45 @@ Panel {
                       font.pixelSize: Style.font.caption
                       elide: Text.ElideRight
                     }
+
+                    Text {
+                      width: parent.width
+                      visible: libraryRow.hasCursor
+                      opacity: libraryRow.hasCursor ? 1 : 0
+                      text: Library.playSummary(libraryRow.modelData, root.nowSeconds)
+                      textFormat: Text.PlainText
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                      Behavior on opacity { NumberAnimation { duration: 90 } }
+                    }
+
+                    // Only says something when there is something to say: a
+                    // save to come back to, and which slot it is in.
+                    Text {
+                      width: parent.width
+                      visible: libraryRow.hasCursor && libraryRow.modelData.resumeAt > 0
+                      text: {
+                        var g = libraryRow.modelData
+                        var slot = g.resumeSlot === "auto" ? "auto save" : ("slot " + g.resumeSlot)
+                        var ago = Library.formatAgo(g.resumeAt, root.nowSeconds)
+                        return "⏎ resumes " + slot + (ago ? " · saved " + ago : "")
+                      }
+                      textFormat: Text.PlainText
+                      color: root.accent
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
                   }
 
                   // A dot rather than a third line: it says "this one has a
                   // save" at a glance without growing the row again.
                   Rectangle {
                     id: resumeDot
-                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: Style.space(6)
                     width: Style.space(5)
                     height: width
                     radius: width / 2
@@ -687,6 +842,7 @@ Panel {
                   acceptedButtons: Qt.LeftButton | Qt.RightButton
                   onContainsMouseChanged: if (containsMouse) {
                     root.cursorActive = true
+                    root.focusZone = "list"
                     root.cursorIndex = root.continueRows.length + libraryRow.index
                   }
                   onClicked: function (mouse) {
@@ -872,7 +1028,7 @@ Panel {
             visible: root.games.length > 0
             horizontalAlignment: Text.AlignHCenter
             text: root.systems.length > 1
-                  ? "⏎ resume   f fresh   s system   / search   r rescan"
+                  ? "⇥ search · systems · games   ⏎ resume   f fresh   r rescan"
                   : "⏎ resume   f start fresh   / search   r rescan"
             textFormat: Text.PlainText
             color: root.dim
