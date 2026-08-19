@@ -262,6 +262,16 @@ Panel {
     onExited: root.refresh()
   }
 
+  // The overlay is a separate entry point in the same plugin, so it is
+  // summoned by id through the shell rather than reached in QML.
+  function browseAll() {
+    root.close()
+    Quickshell.execDetached([
+      "omarchy-shell", "-q", "shell", "summon", root.pluginId,
+      JSON.stringify({ system: root.systemFilter })
+    ])
+  }
+
   function installRetroArch() {
     root.close()
     Quickshell.execDetached([
@@ -318,6 +328,7 @@ Panel {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { root.refresh(); return "ok" }
+    function browse(): void { root.browseAll() }
     function status(): string {
       return JSON.stringify({
         games: root.games.length,
@@ -334,7 +345,11 @@ Panel {
     text: "󰊴"
     active: root.playing
     onPressed: function (buttonCode) {
-      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) root.refresh()
+      // Right-click hands the current system over to the fullscreen grid, so
+      // the two surfaces read as one product rather than two plugins that
+      // happen to share a scanner.
+      if (buttonCode === Qt.RightButton) root.browseAll()
+      else if (buttonCode === Qt.MiddleButton) root.refresh()
       else root.toggle()
     }
   }
@@ -380,6 +395,7 @@ Panel {
         if (text === "/") root.enterZone("search")
         else if (text === "r" || text === "R") root.refresh()
         else if (text === "f" || text === "F") root.activateCursor(false)
+        else if (text === "b" || text === "B") root.browseAll()
         else if (text === "s") root.cycleSystem(1)
         else if (text === "S") root.cycleSystem(-1)
       }
@@ -1028,8 +1044,8 @@ Panel {
             visible: root.games.length > 0
             horizontalAlignment: Text.AlignHCenter
             text: root.systems.length > 1
-                  ? "⇥ search · systems · games   ⏎ resume   f fresh   r rescan"
-                  : "⏎ resume   f start fresh   / search   r rescan"
+                  ? "⇥ zones   ⏎ resume   f fresh   b browse all   r rescan"
+                  : "⏎ resume   f start fresh   b browse all   r rescan"
             textFormat: Text.PlainText
             color: root.dim
             opacity: 0.7

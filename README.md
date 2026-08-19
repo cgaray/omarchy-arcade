@@ -4,7 +4,14 @@ Your games in the Omarchy bar, each one showing the frame you paused on.
 Press Enter and you are back inside it.
 
 <p align="center">
-  <img src="preview.png" alt="The Arcade panel: a Continue shelf of save-state thumbnails above the game library" width="420">
+  <img src="preview.png" alt="The Arcade bar panel: a Continue shelf of save-state thumbnails above the game library" width="380">
+</p>
+
+Press `b`, or right-click the bar icon, and the whole library opens as a wall
+of cover art.
+
+<p align="center">
+  <img src="preview-overlay.png" alt="The Arcade overlay: a fullscreen grid of game cover art with system filters" width="820">
 </p>
 
 ## Why this and not a game launcher
@@ -27,6 +34,21 @@ decide to play — and around the desktop you are playing on top of.
 That middle group is the part a standalone launcher cannot do. It is the reason
 this is an Omarchy plugin and not another window.
 
+## Two surfaces, one plugin
+
+Arcade ships a bar widget and a fullscreen overlay from the same plugin id.
+They do different jobs:
+
+| Surface | For |
+|---|---|
+| **Bar panel** | Picking up where you left off. The Continue shelf, search, and a resume in two keystrokes. |
+| **Overlay** | Browsing. A hundred games as cover art, filtered by system. |
+
+The shell instantiates the two entry points as separate object trees, so they
+share nothing at runtime — and do not need to. Both run the same scanner and
+read the same `cores.conf` and save states, so the disk is the shared state: a
+core chosen in one is already in force in the other.
+
 ## Install
 
 ```bash
@@ -40,10 +62,11 @@ or by hand in `~/.config/omarchy/shell.json`:
 { "bar": { "layout": { "right": [ { "id": "io.garay.arcade" } ] } } }
 ```
 
-Optionally bind it. In `~/.config/hypr/bindings.conf`:
+Optionally bind them. In `~/.config/hypr/bindings.conf`:
 
 ```
 bindd = SUPER, G, Arcade, exec, omarchy-shell io.garay.arcade toggle
+bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell summon io.garay.arcade '{}'
 ```
 
 ## Your library
@@ -124,11 +147,17 @@ at launch, and a ROM nothing can place is left out rather than guessed at.
 | `Enter` | Play, resuming the save state if there is one |
 | `f` | Start fresh, ignoring the save state |
 | `s` | Next system (`S` for previous) |
+| `b` | Open the fullscreen library |
 | `/` | Jump to search |
 | `r` | Rescan |
 | `Esc` | Clear the search, then close |
 
-Right-click a row to start it fresh; left-click resumes.
+Right-click a row to start it fresh; left-click resumes. Right-clicking the
+bar icon opens the fullscreen library on whatever system you were looking at;
+middle-clicking rescans.
+
+In the overlay, arrow keys move, `Tab` walks the systems, typing filters, and
+there is no search box to reach for — the whole surface is one.
 
 ## Settings
 
@@ -146,7 +175,8 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 
 | Path | What |
 |---|---|
-| `Panel.qml` | The bar button and its popup. All UI. |
+| `Panel.qml` | The bar button and its popup. |
+| `Overlay.qml` | The fullscreen cover-art grid. |
 | `bin/omarchy-arcade-cores` | Reads RetroArch's core `.info` files; records core choices. |
 | `Library.js` | Filtering, ranking, Continue selection, system names. Pure, tested. |
 | `bin/omarchy-arcade-scan` | Builds the library as JSON. |
@@ -166,8 +196,9 @@ Both scripts run standalone:
 ./tests/run.sh
 ```
 
-Manifest validation, `bash -n`, `qmllint` on `Library.js`, a bar-widget contract
-check, 40 unit tests over `Library.js`, and 38 integration tests that run the
+Manifest validation, `bash -n`, `qmllint` on `Library.js` and `Overlay.qml`, a
+plugin contract
+check, 47 unit tests over `Library.js`, and 38 integration tests that run the
 scanner against a fixture library — including the full core-precedence chain,
 `DETECT` entries, uninstalled cores, extensionless ROMs, save states in
 per-core subdirectories, dead playlist entries, malformed playlists, and
@@ -177,10 +208,10 @@ display, no running shell, no emulator.
 
 ## Status
 
-Early, but working end to end: the bar widget, the Continue shelf with save
+Early, but working end to end: both surfaces, the Continue shelf with save
 state thumbnails, box art, search, per-system browsing, the core picker, both
 library sources, and the desktop integration. If RetroArch is not installed,
-the panel says so and offers Omarchy's own installer.
+either surface says so and offers Omarchy's own installer.
 
 Not yet: Steam, Lutris, and Heroic as additional sources — the scanner is
 shaped for them, each being a function that appends to the same record shape.

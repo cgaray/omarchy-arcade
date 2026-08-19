@@ -38,6 +38,33 @@ check "the entry point exists" "yes" "$([[ -f $ROOT/$ENTRY ]] && echo yes || ech
 check "the manifest declares the bar-widget kind" \
   "true" "$(jq '(.kinds | index("bar-widget")) != null' "$MANIFEST")"
 
+# The plugin ships two surfaces from one id. The shell instantiates them as
+# separate object trees through separate code paths, and a kind declared
+# without its entry point loads as nothing at all with only a console line to
+# explain it -- so check the pairing here.
+OVERLAY=$(jq -r '.entryPoints.overlay // ""' "$MANIFEST")
+check "the manifest declares the overlay kind" \
+  "true" "$(jq '(.kinds | index("overlay")) != null' "$MANIFEST")"
+
+check "the manifest names an overlay entry point" "Overlay.qml" "$OVERLAY"
+
+check "the overlay entry point exists" "yes" "$([[ -f $ROOT/$OVERLAY ]] && echo yes || echo no)"
+
+# The shell calls these by name on the loaded object; a rename is silent.
+for fn in "function open" "function close" "function toggle"; do
+  check "the overlay defines $fn" \
+    "true" "$(grep -qE "^\s*$fn\(" "$ROOT/$OVERLAY" && echo true || echo false)"
+done
+
+check "the overlay dismisses itself through the shell host" \
+  "true" "$(grep -q 'shell.hide(root.pluginId)' "$ROOT/$OVERLAY" && echo true || echo false)"
+
+# Both surfaces spawn the same helpers by path.
+for script in omarchy-arcade-scan omarchy-arcade-launch; do
+  check "$script is referenced by the overlay" \
+    "true" "$(grep -qF "$script" "$ROOT/$OVERLAY" && echo true || echo false)"
+done
+
 # A bar-widget id that is not also in barWidget.displayName territory shows up
 # in the bar settings list with no name at all.
 check "the widget has a display name" \

@@ -5,16 +5,26 @@
   "version": "0.1.0",
   "author": "Christopher Garay",
   "license": "MIT",
-  "description": "Your games in the Omarchy bar, each one showing the frame you paused on. Enter picks up exactly where you left off.",
-  "kinds": ["bar-widget"],
+  "description": "Your games in the Omarchy bar, each one showing the frame you paused on \u2014 plus a fullscreen cover-art grid for browsing the whole library.",
+  "kinds": [
+    "bar-widget",
+    "overlay"
+  ],
   "entryPoints": {
-    "barWidget": "Panel.qml"
+    "barWidget": "Panel.qml",
+    "overlay": "Overlay.qml"
   },
   "barWidget": {
     "displayName": "Arcade",
-    "description": "Resume a RetroArch save state from the bar, with the frame you paused on as the thumbnail. Notifications and the screensaver stay out of the way while you play.",
+    "description": "Resume a RetroArch save state from the bar, with the frame you paused on as the thumbnail. Right-click for the fullscreen library.",
     "category": "Gaming",
-    "aliases": ["arcade", "games", "retroarch", "emulator", "roms"],
+    "aliases": [
+      "arcade",
+      "games",
+      "retroarch",
+      "emulator",
+      "roms"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {

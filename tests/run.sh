@@ -30,13 +30,14 @@ for script in "$ROOT"/bin/*; do
   step "bash -n $(basename "$script")" bash -n "$script"
 done
 
-# Library.js is plain JavaScript, so qmllint can actually resolve it. Panel.qml
-# is not lintable: its root type comes from qs.Ui, which qmllint cannot resolve
-# without Quickshell's type information, and it exits non-zero on every bar
-# widget including the first-party ones. panel-contract-test.sh covers that
-# file instead.
+# Overlay.qml has a plain Item root, so qmllint can resolve and check it.
+# Panel.qml cannot be linted: its root type comes from qs.Ui, which qmllint
+# cannot resolve without Quickshell's type information, and it exits non-zero
+# on every bar widget including the first-party ones. panel-contract-test.sh
+# covers that file instead.
 if command -v qmllint >/dev/null; then
   step "qmllint Library.js" qmllint "$ROOT/Library.js"
+  step "qmllint Overlay.qml" qmllint -I /usr/share/omarchy/shell "$ROOT/Overlay.qml"
 else
   echo "── qmllint (skipped: not installed)"
 fi
