@@ -170,6 +170,14 @@ Item {
       root.setSystem(root.systems[slot - 1].system)
   }
 
+  function systemShortcut(event) {
+    if (!(event.modifiers & (Qt.AltModifier | Qt.ControlModifier))) return -1
+    if (event.key >= Qt.Key_0 && event.key <= Qt.Key_9)
+      return event.key === Qt.Key_0 ? 0 : event.key - Qt.Key_0
+    var text = String(event.text || "")
+    return /^[0-9]$/.test(text) ? Number(text) : -1
+  }
+
   // --- navigation ------------------------------------------------------------
 
   function columns() {
@@ -294,7 +302,11 @@ Item {
 
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function (event) {
-          if (event.key === Qt.Key_Escape) {
+          var systemSlot = root.systemShortcut(event)
+          if (systemSlot >= 0) {
+            root.jumpSystem(systemSlot)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Escape) {
             if (root.filterText) root.setFilter("")
             else if (root.systemFilter) root.setSystem("")
             else root.dismiss()
@@ -310,10 +322,6 @@ Item {
             event.accepted = true
           } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_Backspace) {
             root.setFilter("")
-            event.accepted = true
-          } else if ((event.modifiers & Qt.AltModifier)
-                     && event.key >= Qt.Key_0 && event.key <= Qt.Key_9) {
-            root.jumpSystem(event.key === Qt.Key_0 ? 0 : event.key - Qt.Key_0)
             event.accepted = true
           } else if (!event.modifiers && event.text === "j") {
             root.move(0, 1)
@@ -353,7 +361,7 @@ Item {
           } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.activate(!(event.modifiers & Qt.ShiftModifier))
             event.accepted = true
-          } else if (event.text && event.text.length === 1
+          } else if (!event.modifiers && event.text && event.text.length === 1
                      && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127) {
             // Typing filters. There is no separate search box to reach for:
             // the whole surface is the search box.
@@ -716,7 +724,7 @@ Item {
 
           Text {
             width: parent.width
-            text: "↑↓←→ or hjkl move    Enter resume    Shift+Enter fresh    type search\nTab / Shift+Tab systems    Alt+0 all, Alt+1..9 jump system    F5 or Ctrl+R refresh    Ctrl+Backspace clear    Esc back"
+            text: "↑↓←→ or hjkl move    Enter resume    Shift+Enter fresh    type search\nTab / Shift+Tab systems    Ctrl+0 all, Ctrl+1..9 jump system    Alt+number also works    F5 or Ctrl+R refresh    Ctrl+Backspace clear    Esc back"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
