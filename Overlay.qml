@@ -22,7 +22,7 @@ Item {
   property var shell: null
   property var manifest: null
 
-  readonly property string pluginId: (root.manifest && root.manifest.id) || "io.garay.arcade"
+  readonly property string pluginId: (root.manifest && root.manifest.id) || "io.github.cgaray.arcade"
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/" + pluginId
 
   // Commands are spawned by absolute path. execDetached does not go through a

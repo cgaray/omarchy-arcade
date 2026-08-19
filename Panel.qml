@@ -13,8 +13,8 @@ import "ArcadeSession.js" as Session
 // memory rather than reading a list of filenames.
 Panel {
   id: root
-  moduleName: "io.garay.arcade"
-  ipcTarget: "io.garay.arcade"
+  moduleName: "io.github.cgaray.arcade"
+  ipcTarget: "io.github.cgaray.arcade"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -26,7 +26,7 @@ Panel {
   // Single-sourced: browseAll() referenced root.pluginId when only pluginDir
   // existed, and QML reads an undeclared property as undefined without a
   // murmur -- so the spawn got a broken argv and did nothing at all.
-  readonly property string pluginId: "io.garay.arcade"
+  readonly property string pluginId: "io.github.cgaray.arcade"
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/" + pluginId
 
   // Commands are spawned by absolute path. execDetached does not go through a
@@ -366,9 +366,9 @@ Panel {
 
   // manageIpc is off because this handler adds `refresh` on top of the base
   // open/close/toggle set, so a keybinding can rescan without opening
-  // anything: `omarchy-shell io.garay.arcade refresh`.
+  // anything: `omarchy-shell io.github.cgaray.arcade refresh`.
   IpcHandler {
-    target: "io.garay.arcade"
+    target: "io.github.cgaray.arcade"
 
     function open(): void { root.open() }
     function close(): void { root.close() }

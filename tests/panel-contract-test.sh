@@ -91,7 +91,7 @@ check "there is a bar button with that id" \
   "1" "$(grep -cE '^\s*id: button' "$PANEL")"
 
 # manageIpc:false hands the IpcHandler to us; forgetting to write one leaves
-# `omarchy-shell io.garay.arcade toggle` answering "Target not found".
+# `omarchy-shell io.github.cgaray.arcade toggle` answering "Target not found".
 if grep -qE '^\s*manageIpc: false' "$PANEL"; then
   check "manageIpc:false is paired with an IpcHandler" \
     "1" "$(grep -cE '^\s*IpcHandler \{' "$PANEL")"

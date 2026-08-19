@@ -55,18 +55,18 @@ core chosen in one is already in force in the other.
 omarchy plugin add https://github.com/cgaray/omarchy-arcade.git --enable
 ```
 
-Then add `io.garay.arcade` to your bar from **Omarchy menu → Settings → Bar**,
+Then add `io.github.cgaray.arcade` to your bar from **Omarchy menu → Settings → Bar**,
 or by hand in `~/.config/omarchy/shell.json`:
 
 ```jsonc
-{ "bar": { "layout": { "right": [ { "id": "io.garay.arcade" } ] } } }
+{ "bar": { "layout": { "right": [ { "id": "io.github.cgaray.arcade" } ] } } }
 ```
 
 Optionally bind them. In `~/.config/hypr/bindings.conf`:
 
 ```
-bindd = SUPER, G, Arcade, exec, omarchy-shell io.garay.arcade toggle
-bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell summon io.garay.arcade '{}'
+bindd = SUPER, G, Arcade, exec, omarchy-shell io.github.cgaray.arcade toggle
+bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell summon io.github.cgaray.arcade '{}'
 ```
 
 ## Your library
