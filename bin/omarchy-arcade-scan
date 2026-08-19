@@ -498,7 +498,11 @@ fingerprint() {
     find "$ROM_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$SAVESTATE_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -printf '%T@\t%s\t%p\n' 2>/dev/null
-    [[ -f $CORES_CONF ]] && stat -c 'cores.conf\t%Y' "$CORES_CONF" 2>/dev/null
+    # Folded in by content, not mtime: stat's %Y has whole-second resolution,
+    # so a choice written in the same second as the previous check would have
+    # produced an identical signature and stayed invisible for good. The ROM
+    # and state entries above use %T@, which is fractional, so they are safe.
+    [[ -f $CORES_CONF ]] && { printf 'cores.conf\t'; cat "$CORES_CONF"; }
   } | sort | cksum | tr -d ' \n'
   printf '\n'
 }

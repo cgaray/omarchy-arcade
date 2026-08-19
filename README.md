@@ -209,7 +209,8 @@ Both scripts run standalone:
 
 Manifest validation, `bash -n`, `qmllint` on `Library.js` and `Overlay.qml`, a
 plugin contract
-check, 49 unit tests over `Library.js`, and 44 integration tests that run the
+check, a QML reference lint, 49 unit tests over `Library.js`, and 44
+integration tests that run the
 scanner against a fixture library — including the full core-precedence chain,
 `DETECT` entries, uninstalled cores, extensionless ROMs, save states in
 per-core subdirectories, dead playlist entries, malformed playlists, and

@@ -22,7 +22,11 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/io.garay.arcade"
+  // Single-sourced: browseAll() referenced root.pluginId when only pluginDir
+  // existed, and QML reads an undeclared property as undefined without a
+  // murmur -- so the spawn got a broken argv and did nothing at all.
+  readonly property string pluginId: "io.garay.arcade"
+  readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/" + pluginId
 
   // Commands are spawned by absolute path. execDetached does not go through a
   // shell and does not inherit a login PATH, so a bare "omarchy-shell" here
