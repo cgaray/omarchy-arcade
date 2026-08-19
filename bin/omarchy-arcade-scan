@@ -29,6 +29,11 @@ die() {
 
 command -v jq >/dev/null || die "jq is required"
 
+# Reported rather than fatal: a machine without RetroArch is a machine that
+# has not installed it yet, and the panel offers Omarchy's installer instead
+# of an error.
+if command -v retroarch >/dev/null; then RETROARCH_PRESENT=true; else RETROARCH_PRESENT=false; fi
+
 # RetroArch writes `key = "value"` with a literal ~ left unexpanded, and uses
 # ":" to mean the config directory itself.
 ra_cfg() {
@@ -48,36 +53,46 @@ THUMBNAIL_DIR=$(ra_cfg thumbnails_directory "$RA_CONFIG_DIR/thumbnails")
 CORE_DIR=$(ra_cfg libretro_directory "/usr/lib/libretro")
 ROM_DIR="${ARCADE_ROM_DIR:-$(ra_cfg rgui_browser_directory "$HOME/Games/roms")}"
 
-# Extension to core, for the fallback walk only. Deliberately conservative:
-# an extension that several systems share (.bin, .iso, .zip) is left out
-# rather than guessed at, because RetroArch given the wrong core does not
-# fail cleanly -- it opens a black window and sits there. Users with an
-# unambiguous library override the map in cores.conf.
-declare -A EXT_CORE=(
-  [sfc]=snes9x [smc]=snes9x [swc]=snes9x [fig]=snes9x
-  [nes]=mesen [fds]=mesen [unf]=mesen [unif]=mesen
-  [gb]=gambatte [gbc]=gambatte
-  [gba]=mgba
-  [md]=genesis_plus_gx [smd]=genesis_plus_gx [gen]=genesis_plus_gx
-  [sms]=genesis_plus_gx [gg]=genesis_plus_gx
-  [n64]=mupen64plus_next [z64]=mupen64plus_next [v64]=mupen64plus_next
-  [nds]=melonds
-  [pce]=mednafen_pce_fast
-  [cue]=mednafen_psx_hw [chd]=mednafen_psx_hw [pbp]=mednafen_psx_hw
-)
+# Which cores can open which extension comes from RetroArch's own .info
+# files, read by omarchy-arcade-cores, rather than a table maintained here.
+# Taking RetroArch at its word means the candidate list is right for whatever
+# the user actually has installed -- and it means several cores usually claim
+# the same extension, which is a choice for the user rather than something to
+# guess at quietly. cores.conf records that choice; until it is made, the
+# first candidate is used so the game is still launchable, and the extension
+# is reported as ambiguous so the panel can offer the picker.
+declare -A EXT_CANDIDATES EXT_CHOICE CORE_SYSTEM
 
-# One `ext = core` per line, `#` comments ignored. Lets a user who only owns
-# SNES zips say `zip = snes9x` and get their library back.
-if [[ -f $CORES_CONF ]]; then
-  while IFS= read -r line; do
-    line="${line%%#*}"
-    [[ $line == *=* ]] || continue
-    ext="${line%%=*}"; core="${line#*=}"
-    ext="$(tr -d '[:space:]' <<<"$ext" | tr '[:upper:]' '[:lower:]')"
-    core="$(tr -d '[:space:]' <<<"$core")"
-    [[ -n $ext && -n $core ]] && EXT_CORE[$ext]="$core"
-  done <"$CORES_CONF"
-fi
+load_cores() {
+  local raw
+  raw=$("$(dirname "${BASH_SOURCE[0]}")/omarchy-arcade-cores" list 2>/dev/null) || return 1
+  [[ -n $raw ]] || return 1
+
+  local ext ids
+  while IFS=$'\t' read -r ext ids; do
+    [[ -n $ext ]] || continue
+    EXT_CANDIDATES[$ext]="$ids"
+  done < <(jq -r '.byExtension | to_entries[] | "\(.key)\t\(.value | join(" "))"' <<<"$raw" 2>/dev/null)
+
+  local core
+  while IFS=$'\t' read -r ext core; do
+    [[ -n $ext ]] || continue
+    EXT_CHOICE[$ext]="$core"
+  done < <(jq -r '.choices | to_entries[] | "\(.key)\t\(.value)"' <<<"$raw" 2>/dev/null)
+
+  # RetroArch's .info files name the system each core emulates. That is the
+  # only system a walked ROM has -- there is no playlist to name it -- and
+  # without one the library cannot be browsed by system at all.
+  local id system
+  while IFS=$'\t' read -r id system; do
+    [[ -n $id ]] || continue
+    CORE_SYSTEM[$id]="$system"
+  done < <(jq -r '.cores[] | "\(.id)\t\(.system)"' <<<"$raw" 2>/dev/null)
+
+  CORES_JSON="$raw"
+}
+
+CORES_JSON="{}"
 
 core_path_for() {
   local name="$1"
@@ -161,8 +176,13 @@ boxart_for() {
 emit_games() {
   local games_json="[]"
   local playlist_count=0 walk_count=0
+  # ROMs a playlist already claimed. The walk consults this so the two sources
+  # union instead of competing: a scanned game keeps its playlist metadata,
+  # and an unscanned one still shows up.
+  declare -A SEEN_ROM
 
   index_states
+  load_cores || true
 
   # --- Source 1: playlists ------------------------------------------------
   if [[ -d $PLAYLIST_DIR ]]; then
@@ -207,23 +227,29 @@ emit_games() {
           || continue
 
         games_json=$(add_game "$games_json" "$rom" "$label" "${db%.lpl}" "$core") || true
+        SEEN_ROM["$rom"]=1
         playlist_count=$((playlist_count + 1))
       done < <(jq -c '.[]' <<<"$entries" 2>/dev/null)
     done < <(find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -print0 2>/dev/null)
   fi
 
   # --- Source 2: ROM directory walk ---------------------------------------
-  # Skipped entirely once playlists produced anything, so a user with a
-  # curated library never sees it second-guessed by a filename heuristic.
-  if (( playlist_count == 0 )) && [[ -d $ROM_DIR ]]; then
+  # Always runs. Scanning content into a RetroArch playlist is something
+  # people do a few games at a time, so a library is usually part scanned and
+  # part not; letting the playlist suppress the walk hid every ROM the user
+  # had not got round to importing yet. Anything a playlist already claimed is
+  # skipped here so it keeps the better metadata rather than appearing twice.
+  if [[ -d $ROM_DIR ]]; then
     local rom
     while IFS= read -r -d '' rom; do
+      [[ -z ${SEEN_ROM["$rom"]:-} ]] || continue
+
       local core_name core
       core_name=$(ext_core_for "$rom") || continue
       core=$(core_path_for "$core_name") || continue
 
-      local label="${rom##*/}"
-      label="${label%.*}"
+      local label
+      label=$(walk_label "$rom")
       games_json=$(add_game "$games_json" "$rom" "$label" "" "$core") || true
       walk_count=$((walk_count + 1))
     done < <(find "$ROM_DIR" -type f -print0 2>/dev/null)
@@ -231,27 +257,170 @@ emit_games() {
 
   jq -n \
     --argjson games "$games_json" \
+    --argjson cores "$CORES_JSON" \
     --arg romDir "$ROM_DIR" \
     --arg playlistDir "$PLAYLIST_DIR" \
     --argjson fromPlaylists "$playlist_count" \
     --argjson fromWalk "$walk_count" \
-    '{
-       games: ($games | sort_by(.title | ascii_downcase)),
-       meta: {
-         romDir: $romDir,
-         playlistDir: $playlistDir,
-         fromPlaylists: $fromPlaylists,
-         fromWalk: $fromWalk
-       }
-     }'
+    --argjson retroarch "$RETROARCH_PRESENT" \
+    '($games | sort_by(.title | ascii_downcase)) as $sorted
+     | ($sorted | map(.ext) | unique | map(select(. != ""))) as $exts
+     | {
+         games: $sorted,
+         extensions: [
+           $exts[]
+           | . as $e
+           | (($cores.cores // []) | map(select(.extensions | index($e)))) as $cands
+           | {
+               ext: $e,
+               candidates: [ $cands[] | { id: .id, name: .corename, system: .system } ],
+               chosen: ((($cores.choices // {})[$e]) // ""),
+               resolved: (($sorted | map(select(.ext == $e)) | first | .coreName) // "")
+             }
+         ],
+         meta: {
+           romDir: $romDir,
+           playlistDir: $playlistDir,
+           fromPlaylists: $fromPlaylists,
+           fromWalk: $fromWalk,
+           retroarchInstalled: $retroarch,
+           coreCount: ((($cores.meta // {}).coreCount) // 0)
+         }
+       }'
+}
+
+# Folder name to the extension it stands for. ROM collections are commonly
+# laid out as roms/<system>/, the convention RetroPie and EmulationStation
+# established, and it is the only hint available for a file with no extension
+# at all -- which is most of a collection downloaded as a set.
+declare -A DIR_EXT=(
+  [snes]=sfc [sfc]=sfc [supernintendo]=sfc [super-nintendo]=sfc [superfamicom]=sfc
+  [nes]=nes [famicom]=nes [nintendo]=nes
+  [gb]=gb [gameboy]=gb [game-boy]=gb
+  [gbc]=gbc [gameboycolor]=gbc
+  [gba]=gba [gameboyadvance]=gba
+  [n64]=n64 [nintendo64]=n64
+  [nds]=nds [ds]=nds
+  [genesis]=md [megadrive]=md [md]=md [segagenesis]=md
+  [sms]=sms [mastersystem]=sms
+  [gg]=gg [gamegear]=gg
+  [pce]=pce [turbografx]=pce [turbografx16]=pce
+)
+
+# libmagic recognises most ROM images by content, which beats any convention
+# when a collection is a flat folder of extensionless files. Matched against
+# the description `file -b` prints, longest-lived substrings only.
+sniff_ext() {
+  command -v file >/dev/null || return 1
+  local desc
+  desc=$(file -b "$1" 2>/dev/null) || return 1
+  case "$desc" in
+    "Super NES ROM image"*|"Super Nintendo"*) printf 'sfc' ;;
+    *"Nintendo Entertainment System ROM"*|"iNES"*|*" iNES"*) printf 'nes' ;;
+    "Game Boy Advance ROM"*) printf 'gba' ;;
+    "Game Boy Color ROM"*) printf 'gbc' ;;
+    "Game Boy ROM"*) printf 'gb' ;;
+    "Nintendo 64 ROM"*|"N64 ROM"*) printf 'n64' ;;
+    "Sega Mega Drive"*|"Sega Genesis"*) printf 'md' ;;
+    "Sega Master System"*) printf 'sms' ;;
+    *) return 1 ;;
+  esac
+}
+
+# The extension to resolve a core with, which is not always the one on the
+# filename -- most of a downloaded collection has no extension at all.
+# `${rom##*.}` is not enough on its own: on a name with no dot it returns the
+# whole name, which then silently matches nothing.
+effective_ext() {
+  local rom="$1"
+  local base="${rom##*/}"
+
+  if [[ $base == *.* ]]; then
+    tr '[:upper:]' '[:lower:]' <<<"${base##*.}"
+    return 0
+  fi
+
+  local dir="${rom%/*}"
+  dir="${dir##*/}"
+  dir="$(tr '[:upper:]' '[:lower:]' <<<"$dir" | tr -d ' _')"
+  if [[ -n ${DIR_EXT[$dir]:-} ]]; then
+    printf '%s' "${DIR_EXT[$dir]}"
+    return 0
+  fi
+
+  sniff_ext "$rom"
+}
+
+# A filename like "mightymorphinpowerrangers" carries no word boundaries, but
+# the ROM header does -- libmagic prints the internal title, and that is the
+# name the game actually shipped under. Only used when the filename looks
+# machine-squashed: no spaces, no separators, no capitals. A filename someone
+# clearly typed ("Super Mario World (USA)", "a-plumber-for-all-seasons") is
+# better than any header and is left alone.
+is_squashed_name() {
+  local stem="$1"
+  [[ ${#stem} -ge 3 ]] || return 1
+  [[ $stem != *[[:space:]]* ]] || return 1
+  [[ $stem != *-* ]] || return 1
+  [[ $stem != *_* ]] || return 1
+  [[ $stem != *[[:upper:]]* ]] || return 1
+  return 0
+}
+
+rom_internal_title() {
+  command -v file >/dev/null || return 1
+  local desc title
+  desc=$(file -b -- "$1" 2>/dev/null) || return 1
+  # libmagic renders the header name in quotes: ROM image "CHRONO TRIGGER" ...
+  # Matched in-shell rather than through sed, because this runs once per ROM
+  # and a second subprocess per file doubled the scan time on a real library.
+  [[ $desc =~ \"([^\"]+)\" ]] || return 1
+  title="${BASH_REMATCH[1]}"
+  title="${title#"${title%%[![:space:]]*}"}"
+  title="${title%"${title##*[![:space:]]}"}"
+  [[ -n $title ]] || return 1
+  printf '%s' "$title"
+}
+
+# The best label for a ROM the walk found, which is usually its filename.
+walk_label() {
+  local rom="$1"
+  local stem="${rom##*/}"
+  [[ $stem == *.* ]] && stem="${stem%.*}"
+
+  if is_squashed_name "$stem"; then
+    local internal
+    internal=$(rom_internal_title "$rom") && { printf '%s' "$internal"; return 0; }
+  fi
+  printf '%s' "$stem"
 }
 
 ext_core_for() {
-  local rom="$1"
-  local ext="${rom##*.}"
-  ext="$(tr '[:upper:]' '[:lower:]' <<<"$ext")"
-  [[ -n ${EXT_CORE[$ext]:-} ]] || return 1
-  printf '%s' "${EXT_CORE[$ext]}"
+  local ext
+  ext=$(effective_ext "$1") || return 1
+  [[ -n $ext ]] || return 1
+
+  # A recorded choice wins, but only while that core is still installed --
+  # uninstalling a core should not turn its games into dead rows.
+  local chosen="${EXT_CHOICE[$ext]:-}"
+  if [[ -n $chosen ]] && core_path_for "$chosen" >/dev/null; then
+    printf '%s' "$chosen"
+    return 0
+  fi
+
+  local candidates="${EXT_CANDIDATES[$ext]:-}"
+  [[ -n $candidates ]] || return 1
+  # Deterministic: jq sorted the candidate list, so the same library resolves
+  # the same way on every scan rather than shuffling under the user.
+  printf '%s' "${candidates%% *}"
+}
+
+# Is this extension one the user still has a decision to make about?
+ext_ambiguous() {
+  local ext="$1"
+  [[ -z ${EXT_CHOICE[$ext]:-} ]] || return 1
+  local candidates="${EXT_CANDIDATES[$ext]:-}"
+  [[ $candidates == *" "* ]]
 }
 
 add_game() {
@@ -274,9 +443,19 @@ add_game() {
     [[ $last_played =~ ^[0-9]+$ ]] || last_played=0
   fi
 
+  local ext
+  ext=$(effective_ext "$rom") || ext=""
+
+  # A walked ROM has no playlist to name its system, so borrow the one
+  # RetroArch attributes to the core that will run it. Deliberately after
+  # boxart_for above: thumbnails live under a playlist's name, and a core's
+  # system name is not one.
+  [[ -n $db ]] || db="${CORE_SYSTEM[$core_name]:-}"
+
   jq -c \
     --argjson acc "$acc" \
     --arg key "$rom" \
+    --arg ext "$ext" \
     --arg title "$label" \
     --arg system "$db" \
     --arg core "$core" \
@@ -288,7 +467,7 @@ add_game() {
     --arg resumeArt "$resume_art" \
     --argjson lastPlayed "${last_played:-0}" \
     -n '$acc + [{
-      key: $key, title: $title, system: $system,
+      key: $key, title: $title, system: $system, ext: $ext,
       core: $core, coreName: $coreName, rom: $rom, art: $art,
       resumeSlot: $resumeSlot, resumeAt: $resumeAt, resumeArt: $resumeArt,
       lastPlayed: $lastPlayed

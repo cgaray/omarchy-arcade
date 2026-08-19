@@ -30,6 +30,9 @@ Panel {
   implicitHeight: button.implicitHeight
 
   property var games: []
+  property var extensions: []
+  property var scanMeta: ({})
+  readonly property bool retroarchMissing: scanMeta.retroarchInstalled === false
   property var continueRows: []
   property var libraryRows: []
   property string loadError: ""
@@ -38,6 +41,11 @@ Panel {
   property double nowSeconds: 0
 
   property string query: ""
+  property string systemFilter: ""
+  readonly property var systems: Library.systemsOf(root.games)
+  // A Dropdown popup takes the keyboard while it is open; the panel's own
+  // cursor keys would otherwise move the selection behind it.
+  property bool dropdownOpen: false
   property bool cursorActive: false
   property int cursorIndex: 0
 
@@ -79,12 +87,23 @@ Panel {
     var parsed = Library.parseLibrary(raw)
     root.loadError = parsed.error
     root.games = parsed.games
+    root.extensions = parsed.extensions
+    root.scanMeta = parsed.meta
     root.rebuild()
   }
 
   function rebuild() {
-    root.continueRows = root.query ? [] : Library.resumableGames(root.games, 6)
-    root.libraryRows = Library.filterGames(root.games, root.query, root.maxLibraryRows)
+    root.continueRows = (root.query || root.systemFilter)
+      ? [] : Library.resumableGames(root.games, 6)
+    // A filter that survives a rescan but names a system no longer present
+    // would silently show an empty library, so drop it.
+    if (root.systemFilter) {
+      var stillThere = false
+      for (var s = 0; s < root.systems.length; s++)
+        if (root.systems[s].system === root.systemFilter) stillThere = true
+      if (!stillThere) root.systemFilter = ""
+    }
+    root.libraryRows = Library.filterGames(root.games, root.query, root.maxLibraryRows, root.systemFilter)
     if (root.cursorIndex >= root.cursorTargets.length)
       root.cursorIndex = Math.max(0, root.cursorTargets.length - 1)
   }
@@ -93,6 +112,24 @@ Panel {
     root.query = next
     root.cursorIndex = 0
     root.rebuild()
+  }
+
+  function setSystem(system) {
+    root.systemFilter = system
+    root.cursorIndex = 0
+    root.rebuild()
+    Qt.callLater(function () { panelFlick.contentY = 0 })
+  }
+
+  // "s" walks the filter row, All included, so the whole library stays
+  // reachable from the keyboard without hunting for the chip.
+  function cycleSystem(delta) {
+    if (root.systems.length === 0) return
+    var ids = [""]
+    for (var i = 0; i < root.systems.length; i++) ids.push(root.systems[i].system)
+    var at = ids.indexOf(root.systemFilter)
+    if (at < 0) at = 0
+    root.setSystem(ids[(at + delta + ids.length) % ids.length])
   }
 
   // `resume` is what Enter means everywhere in this panel; Shift+Enter and the
@@ -126,6 +163,33 @@ Panel {
       root.cursorIndex = 0
       root.refresh()
     }
+  }
+
+  // Recording a core choice is a write, so it goes through the same helper the
+  // CLI uses rather than the panel editing cores.conf itself. Empty coreId
+  // means "forget my choice and go back to the default".
+  function chooseCore(ext, coreId) {
+    if (!ext) return
+    coreSetProcess.running = false
+    coreSetProcess.command = coreId
+      ? [root.pluginDir + "/bin/omarchy-arcade-cores", "set", ext, coreId]
+      : [root.pluginDir + "/bin/omarchy-arcade-cores", "unset", ext]
+    coreSetProcess.running = true
+  }
+
+  Process {
+    id: coreSetProcess
+    // The choice changes which core the scanner resolves, so the library has
+    // to be rebuilt before the rows can be believed again.
+    onExited: root.refresh()
+  }
+
+  function installRetroArch() {
+    root.close()
+    Quickshell.execDetached([
+      "omarchy-launch-floating-terminal-with-presentation",
+      "omarchy-install-gaming-retroarch"
+    ])
   }
 
   Process {
@@ -210,7 +274,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: search.activeFocus
+      blocked: search.activeFocus || root.dropdownOpen
 
       onMoveRequested: function (dx, dy) { if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: root.activateCursor(true)
@@ -223,6 +287,8 @@ Panel {
         if (text === "/") Qt.callLater(function () { search.forceActiveFocus() })
         else if (text === "r" || text === "R") root.refresh()
         else if (text === "f" || text === "F") root.activateCursor(false)
+        else if (text === "s") root.cycleSystem(1)
+        else if (text === "S") root.cycleSystem(-1)
       }
 
       Flickable {
@@ -245,6 +311,7 @@ Panel {
             width: parent.width
             title: "Arcade"
             meta: {
+              if (root.retroarchMissing) return "RetroArch is not installed"
               if (root.scanning && root.games.length === 0) return "Scanning your library…"
               if (root.loadError) return root.loadError
               if (root.games.length === 0) return "No games found"
@@ -296,7 +363,7 @@ Panel {
           TextField {
             id: search
             width: parent.width
-            visible: root.games.length > 0
+            visible: root.games.length > 0 && !root.retroarchMissing
             placeholderText: "Search games"
             text: root.query
             foreground: root.foreground
@@ -311,6 +378,52 @@ Panel {
               keyCatcher.forceActiveFocus()
               root.cursorActive = true
               root.activateCursor(true)
+            }
+          }
+
+          // --- Systems -------------------------------------------------------
+          // Only worth showing once there is more than one system to move
+          // between; a single-system library is already filtered.
+          Flickable {
+            width: parent.width
+            visible: root.systems.length > 1 && !root.retroarchMissing
+            height: visible ? systemRow.implicitHeight : 0
+            contentWidth: systemRow.implicitWidth
+            contentHeight: height
+            clip: true
+            flickableDirection: Flickable.HorizontalFlick
+            boundsBehavior: Flickable.StopAtBounds
+
+            Row {
+              id: systemRow
+              spacing: Style.space(6)
+
+              Button {
+                text: "All · " + root.games.length
+                selected: root.systemFilter === ""
+                bordered: true
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.caption
+                onClicked: root.setSystem("")
+              }
+
+              Repeater {
+                model: root.systems
+
+                Button {
+                  required property var modelData
+                  text: modelData.label + " · " + modelData.count
+                  selected: root.systemFilter === modelData.system
+                  bordered: true
+                  foreground: root.foreground
+                  accent: root.accent
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  onClicked: root.setSystem(modelData.system)
+                }
+              }
             }
           }
 
@@ -460,9 +573,12 @@ Panel {
           PanelSectionHeader {
             width: parent.width
             visible: root.libraryRows.length > 0
-            text: root.query
-                  ? (root.libraryRows.length + " match" + (root.libraryRows.length === 1 ? "" : "es"))
-                  : "Library"
+            text: {
+              if (root.query)
+                return root.libraryRows.length + " match" + (root.libraryRows.length === 1 ? "" : "es")
+              if (root.systemFilter) return Library.shortSystem(root.systemFilter) || root.systemFilter
+              return "Library"
+            }
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -581,12 +697,67 @@ Panel {
             }
           }
 
+          // --- RetroArch is not installed ------------------------------------
+          // Arcade is a front end for something that may simply not be here
+          // yet. Omarchy ships an installer for it, so the honest empty state
+          // is a button rather than a sentence telling the user to go and
+          // find one.
+          Column {
+            width: parent.width
+            visible: root.retroarchMissing
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              text: "󰊴"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.displayLarge
+            }
+
+            Text {
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+              text: "Arcade plays your games through RetroArch, which is not installed yet."
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Button {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: "Install RetroArch"
+              iconText: "󰇚"
+              bordered: true
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              onClicked: root.installRetroArch()
+            }
+
+            Text {
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+              text: "Omarchy's own installer, in a terminal. Press r here when it finishes."
+              textFormat: Text.PlainText
+              color: root.dim
+              opacity: 0.7
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
           // --- Empty state ---------------------------------------------------
           // The first screen most people will see, so it says where to put
           // ROMs rather than only reporting their absence.
           Column {
             width: parent.width
             visible: root.games.length === 0 && !root.scanning && root.loadError === ""
+                     && !root.retroarchMissing
             spacing: Style.space(6)
 
             Text {
@@ -621,12 +792,88 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
+          // --- Cores -----------------------------------------------------------
+          // Several installed cores usually claim the same extension, and
+          // RetroArch's own .info files are the only honest source for which.
+          // Rather than ship a table of opinions, offer the candidates and
+          // record the answer. Extensions only one core can open are not
+          // shown -- there is nothing to decide.
+          PanelSeparator {
+            width: parent.width
+            visible: coreRows.model.length > 0
+            foreground: root.foreground
+          }
+
+          PanelSectionHeader {
+            width: parent.width
+            visible: coreRows.model.length > 0
+            text: {
+              var undecided = Library.undecidedExtensions(root.extensions).length
+              return undecided > 0 ? ("Cores · " + undecided + " to choose") : "Cores"
+            }
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              id: coreRows
+              model: Library.choosableExtensions(root.extensions)
+
+              delegate: Item {
+                id: coreRow
+                required property var modelData
+
+                width: parent.width
+                height: coreDropdown.implicitHeight
+
+                Dropdown {
+                  id: coreDropdown
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  label: "." + coreRow.modelData.ext
+                  foreground: root.foreground
+                  accent: root.accent
+                  fontFamily: root.fontFamily
+                  value: coreRow.modelData.chosen
+
+                  // The first entry reverts to the default so a choice is
+                  // never a one-way door, and it names what the default
+                  // actually resolves to rather than just saying "Auto".
+                  options: {
+                    var out = [{
+                      value: "",
+                      label: "Auto · " + (coreRow.modelData.resolved || "first available")
+                    }]
+                    var cands = coreRow.modelData.candidates
+                    for (var i = 0; i < cands.length; i++) {
+                      out.push({ value: cands[i].id, label: cands[i].name || cands[i].id })
+                    }
+                    return out
+                  }
+
+                  onPopupOpenChanged: root.dropdownOpen = popupOpen
+
+                  onChanged: function (value) {
+                    if (value === coreRow.modelData.chosen) return
+                    root.chooseCore(coreRow.modelData.ext, value)
+                  }
+                }
+              }
+            }
+          }
+
           // --- Footer ---------------------------------------------------------
           Text {
             width: parent.width
             visible: root.games.length > 0
             horizontalAlignment: Text.AlignHCenter
-            text: "⏎ resume   f start fresh   / search   r rescan"
+            text: root.systems.length > 1
+                  ? "⏎ resume   f fresh   s system   / search   r rescan"
+                  : "⏎ resume   f start fresh   / search   r rescan"
             textFormat: Text.PlainText
             color: root.dim
             opacity: 0.7

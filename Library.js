@@ -14,13 +14,13 @@
 function parseLibrary(raw) {
   var text = String(raw || "").trim()
   if (!text.length)
-    return { games: [], meta: {}, error: "scanner produced no output" }
+    return { games: [], extensions: [], meta: {}, error: "scanner produced no output" }
 
   var parsed
   try {
     parsed = JSON.parse(text)
   } catch (e) {
-    return { games: [], meta: {}, error: "scanner output was not JSON" }
+    return { games: [], extensions: [], meta: {}, error: "scanner output was not JSON" }
   }
 
   var games = Array.isArray(parsed.games) ? parsed.games : []
@@ -30,7 +30,7 @@ function parseLibrary(raw) {
     if (!g || !g.rom || !g.core) continue
     normalized.push({
       key: String(g.key || g.rom),
-      title: String(g.title || ""),
+      title: prettyTitle(g.title),
       system: String(g.system || ""),
       core: String(g.core),
       coreName: String(g.coreName || ""),
@@ -43,7 +43,25 @@ function parseLibrary(raw) {
     })
   }
 
-  return { games: normalized, meta: parsed.meta || {}, error: "" }
+  var extensions = Array.isArray(parsed.extensions) ? parsed.extensions : []
+  var normalizedExts = []
+  for (var k = 0; k < extensions.length; k++) {
+    var e = extensions[k]
+    if (!e || !e.ext) continue
+    normalizedExts.push({
+      ext: String(e.ext),
+      candidates: Array.isArray(e.candidates) ? e.candidates : [],
+      chosen: String(e.chosen || ""),
+      resolved: String(e.resolved || "")
+    })
+  }
+
+  return {
+    games: normalized,
+    extensions: normalizedExts,
+    meta: parsed.meta || {},
+    error: ""
+  }
 }
 
 // Subsequence match, the same shape of matching the Omarchy menu uses: every
@@ -75,10 +93,40 @@ function subsequenceScore(haystack, needle) {
 // Rank matches, then fall back to the caller's incoming order (which the
 // scanner already sorted by title) so an empty query is stable rather than
 // reshuffling every rescan.
-function filterGames(games, query, limit) {
+// The systems present in a library, each with its count, for the filter row.
+// Sorted by name so the row does not reorder itself as games come and go.
+function systemsOf(games) {
   var list = games || []
+  var counts = {}
+  for (var i = 0; i < list.length; i++) {
+    var raw = String(list[i].system || "")
+    if (!raw) raw = "Unknown"
+    counts[raw] = (counts[raw] || 0) + 1
+  }
+
+  var out = []
+  for (var key in counts) {
+    out.push({ system: key, label: shortSystem(key) || key, count: counts[key] })
+  }
+  out.sort(function (a, b) { return a.label.localeCompare(b.label) })
+  return out
+}
+
+function filterGames(games, query, limit, system) {
+  var all = games || []
   var max = limit || 500
   var q = String(query || "").trim().toLowerCase()
+
+  // The system filter is applied first and independently of the query, so
+  // searching inside a system stays inside it.
+  var wanted = String(system || "")
+  var list = all
+  if (wanted) {
+    list = []
+    for (var s = 0; s < all.length; s++) {
+      if ((String(all[s].system || "") || "Unknown") === wanted) list.push(all[s])
+    }
+  }
 
   if (!q.length) return list.slice(0, max)
 
@@ -157,6 +205,35 @@ var SHORT_SYSTEMS = {
   "amiga": "Amiga"
 }
 
+// ROM headers store the game name in capitals ("THE LEGEND OF ZELDA"), which
+// is how it looked on a 1990 title screen and not how it should look in a
+// list. Only all-caps input is touched -- a title with any lowercase in it was
+// written by a person and is left exactly as they wrote it.
+var TITLE_MINOR_WORDS = {
+  a: 1, an: 1, and: 1, as: 1, at: 1, but: 1, by: 1, for: 1, in: 1, nor: 1,
+  of: 1, on: 1, or: 1, the: 1, to: 1, vs: 1
+}
+
+function prettyTitle(raw) {
+  var text = String(raw || "")
+  if (!text.length) return ""
+  if (/[a-z]/.test(text)) return text
+
+  // Split on spaces but capitalise across hyphens too, so "F-ZERO" becomes
+  // "F-Zero" rather than "F-zero".
+  var words = text.toLowerCase().split(/\s+/)
+  var out = []
+  for (var i = 0; i < words.length; i++) {
+    var w = words[i]
+    if (!w.length) continue
+    if (i > 0 && TITLE_MINOR_WORDS[w]) { out.push(w); continue }
+    out.push(w.replace(/(^|-)([a-z0-9])/g, function (m, sep, ch) {
+      return sep + ch.toUpperCase()
+    }))
+  }
+  return out.join(" ")
+}
+
 function shortSystem(system) {
   var raw = String(system || "").trim()
   if (!raw.length) return ""
@@ -192,6 +269,29 @@ function systemAndCore(game) {
   return system + " · " + core
 }
 
+// Extensions with a decision still to make: more than one installed core
+// claims them and the user has not said which. An extension only one core can
+// open is not a choice, and showing it as one is noise.
+function undecidedExtensions(extensions) {
+  var list = extensions || []
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].candidates.length > 1 && !list[i].chosen) out.push(list[i])
+  }
+  return out
+}
+
+// Every extension worth showing a picker for -- including ones already
+// decided, so a choice can be changed or reverted.
+function choosableExtensions(extensions) {
+  var list = extensions || []
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].candidates.length > 1) out.push(list[i])
+  }
+  return out
+}
+
 function formatAgo(epochSeconds, nowSeconds) {
   var then = Number(epochSeconds || 0)
   if (then <= 0) return ""
@@ -208,8 +308,12 @@ function formatAgo(epochSeconds, nowSeconds) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     parseLibrary: parseLibrary,
+    prettyTitle: prettyTitle,
     shortSystem: shortSystem,
     systemAndCore: systemAndCore,
+    systemsOf: systemsOf,
+    undecidedExtensions: undecidedExtensions,
+    choosableExtensions: choosableExtensions,
     subsequenceScore: subsequenceScore,
     filterGames: filterGames,
     resumableGames: resumableGames,

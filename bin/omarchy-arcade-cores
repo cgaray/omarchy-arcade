@@ -1,0 +1,187 @@
+#!/bin/bash
+
+# What RetroArch knows about the cores you have installed, and which one you
+# picked for an extension.
+#
+# RetroArch ships a .info file per core declaring corename, systemname, and
+# supported_extensions. That is the authoritative answer to "what can open
+# this file", so Arcade reads it rather than carrying its own table of
+# guesses. The list is taken as RetroArch gives it: if a core claims an
+# extension, it is offered as a candidate, and choosing between candidates is
+# the user's call -- which is what `set` records.
+
+set -uo pipefail
+
+RA_CONFIG_DIR="${RA_CONFIG_DIR:-$HOME/.config/retroarch}"
+RA_CFG="$RA_CONFIG_DIR/retroarch.cfg"
+CORES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/arcade/cores.conf"
+
+die() {
+  echo "omarchy-arcade-cores: $*" >&2
+  exit 1
+}
+
+command -v jq >/dev/null || die "jq is required"
+
+ra_cfg() {
+  local key="$1" fallback="$2" value=""
+  if [[ -f $RA_CFG ]]; then
+    value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*$/\1/p" "$RA_CFG" | tail -n1)
+  fi
+  [[ -n $value ]] || value="$fallback"
+  value="${value/#:/$RA_CONFIG_DIR}"
+  value="${value/#\~/$HOME}"
+  printf '%s' "$value"
+}
+
+CORE_DIR=$(ra_cfg libretro_directory "/usr/lib/libretro")
+INFO_DIR=$(ra_cfg libretro_info_path "/usr/share/libretro/info")
+
+# A .info value, unquoted. Keys are `name = "value"`, one per line.
+info_value() {
+  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*$/\1/p" "$1" | head -n1
+}
+
+# Every installed core, with what RetroArch says it opens. A core with no
+# .info file is still listed -- it is installed and launchable -- it just has
+# no extensions to offer, so it never becomes an automatic candidate.
+list_cores() {
+  local so name info ext corename system display
+  local out="[]"
+
+  while IFS= read -r so; do
+    name="$(basename "$so" .so)"
+    info="$INFO_DIR/$name.info"
+    ext=""; corename=""; system=""; display=""
+    if [[ -f $info ]]; then
+      ext="$(info_value "$info" supported_extensions)"
+      corename="$(info_value "$info" corename)"
+      system="$(info_value "$info" systemname)"
+      display="$(info_value "$info" display_name)"
+    fi
+    [[ -n $corename ]] || corename="${name%_libretro}"
+
+    out=$(jq -c \
+      --argjson acc "$out" \
+      --arg id "${name%_libretro}" \
+      --arg path "$so" \
+      --arg corename "$corename" \
+      --arg system "$system" \
+      --arg display "$display" \
+      --arg ext "$ext" \
+      -n '$acc + [{
+        id: $id,
+        path: $path,
+        corename: $corename,
+        system: $system,
+        displayName: (if $display == "" then $corename else $display end),
+        extensions: ($ext | if . == "" then [] else split("|") end | map(ascii_downcase) | unique)
+      }]')
+  done < <(find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' 2>/dev/null | sort)
+
+  printf '%s' "$out"
+}
+
+# The user's choices, as { ext: coreId }.
+read_choices() {
+  local out="{}"
+  [[ -f $CORES_CONF ]] || { printf '%s' "$out"; return; }
+
+  local line ext core
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    [[ $line == *=* ]] || continue
+    ext="$(tr -d '[:space:]' <<<"${line%%=*}" | tr '[:upper:]' '[:lower:]')"
+    core="$(tr -d '[:space:]' <<<"${line#*=}")"
+    [[ -n $ext && -n $core ]] || continue
+    out=$(jq -c --argjson acc "$out" --arg e "$ext" --arg c "$core" -n '$acc + {($e): $c}')
+  done <"$CORES_CONF"
+  printf '%s' "$out"
+}
+
+emit_list() {
+  local cores choices
+  cores=$(list_cores)
+  choices=$(read_choices)
+
+  # byExtension inverts the core list so the scanner and the picker both ask
+  # the same question -- "who can open a .sfc" -- of the same data.
+  jq -n \
+    --argjson cores "$cores" \
+    --argjson choices "$choices" \
+    --arg coreDir "$CORE_DIR" \
+    --arg infoDir "$INFO_DIR" \
+    '{
+      cores: $cores,
+      choices: $choices,
+      byExtension: (
+        reduce ($cores[] | . as $c | $c.extensions[] | {ext: ., id: $c.id}) as $pair
+          ({}; .[$pair.ext] += [$pair.id])
+        | map_values(unique)
+      ),
+      meta: { coreDir: $coreDir, infoDir: $infoDir, coreCount: ($cores | length) }
+    }'
+}
+
+# Record a choice. Validated against installed cores so the file cannot name
+# something that will fail at launch.
+set_choice() {
+  local ext="$1" core="$2"
+  ext="$(tr '[:upper:]' '[:lower:]' <<<"$ext")"
+  [[ $ext =~ ^[a-z0-9]+$ ]] || die "invalid extension: $ext"
+  [[ -f "$CORE_DIR/${core}_libretro.so" ]] || die "core is not installed: $core"
+
+  mkdir -p "$(dirname "$CORES_CONF")"
+  [[ -f $CORES_CONF ]] || printf '# Which core opens which extension. Written by Arcade.\n' >"$CORES_CONF"
+
+  # Rewrite through a temp file so an interrupted write cannot truncate the
+  # user's other choices.
+  local tmp
+  tmp=$(mktemp) || die "could not create temp file"
+  grep -vE "^[[:space:]]*${ext}[[:space:]]*=" "$CORES_CONF" >"$tmp" 2>/dev/null
+  printf '%s = %s\n' "$ext" "$core" >>"$tmp"
+  mv -f "$tmp" "$CORES_CONF"
+  echo "ok"
+}
+
+unset_choice() {
+  local ext="$1"
+  ext="$(tr '[:upper:]' '[:lower:]' <<<"$ext")"
+  [[ -f $CORES_CONF ]] || { echo "ok"; return; }
+  local tmp
+  tmp=$(mktemp) || die "could not create temp file"
+  grep -vE "^[[:space:]]*${ext}[[:space:]]*=" "$CORES_CONF" >"$tmp" 2>/dev/null
+  mv -f "$tmp" "$CORES_CONF"
+  echo "ok"
+}
+
+case "${1:-list}" in
+  list)
+    emit_list
+    ;;
+  set)
+    [[ $# -eq 3 ]] || die "usage: omarchy-arcade-cores set <ext> <core>"
+    set_choice "$2" "$3"
+    ;;
+  unset)
+    [[ $# -eq 2 ]] || die "usage: omarchy-arcade-cores unset <ext>"
+    unset_choice "$2"
+    ;;
+  -h|--help)
+    cat <<USAGE
+Usage: omarchy-arcade-cores [list|set <ext> <core>|unset <ext>]
+
+  list             JSON: installed cores, their extensions (from RetroArch's
+                   own .info files), your recorded choices, and byExtension.
+  set <ext> <core> Record which core opens <ext>. Refuses a core that is not
+                   installed.
+  unset <ext>      Forget a choice and go back to the default.
+
+Choices live in ~/.config/omarchy/arcade/cores.conf, which you can also edit
+by hand.
+USAGE
+    ;;
+  *)
+    die "unknown command: $1"
+    ;;
+esac

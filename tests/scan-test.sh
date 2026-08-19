@@ -30,13 +30,31 @@ FIXTURE=$(mktemp -d -t arcade-fixture-XXXXXX) || exit 1
 trap 'rm -rf "$FIXTURE"' EXIT
 
 mkdir -p "$FIXTURE/ra/playlists" "$FIXTURE/ra/states" "$FIXTURE/ra/thumbnails" \
-         "$FIXTURE/cores" "$FIXTURE/roms" "$FIXTURE/state" "$FIXTURE/config"
+         "$FIXTURE/cores" "$FIXTURE/info" "$FIXTURE/roms" "$FIXTURE/state" "$FIXTURE/config"
 
 # A core only has to exist; the scanner never loads it.
 touch "$FIXTURE/cores/snes9x_libretro.so" "$FIXTURE/cores/gambatte_libretro.so"
 
+# The .info files are the fixture's own, not the machine's: what a core claims
+# to support is exactly what these tests are about, so reading the real
+# /usr/share/libretro/info would make results depend on which cores the
+# developer happens to have installed.
+cat >"$FIXTURE/info/snes9x_libretro.info" <<INFO
+display_name = "Nintendo - SNES / SFC (Snes9x)"
+corename = "Snes9x"
+systemname = "Super Nintendo Entertainment System"
+supported_extensions = "smc|sfc|swc|fig"
+INFO
+cat >"$FIXTURE/info/gambatte_libretro.info" <<INFO
+display_name = "Nintendo - Game Boy / Color (Gambatte)"
+corename = "Gambatte"
+systemname = "Game Boy"
+supported_extensions = "gb|gbc|dmg"
+INFO
+
 cat >"$FIXTURE/ra/retroarch.cfg" <<CFG
 libretro_directory = "$FIXTURE/cores"
+libretro_info_path = "$FIXTURE/info"
 playlist_directory = "$FIXTURE/ra/playlists"
 savestate_directory = "$FIXTURE/ra/states"
 thumbnails_directory = "$FIXTURE/ra/thumbnails"
@@ -90,6 +108,44 @@ check "walk games start with no resume" \
 
 check "meta reports the walk source" \
   "3" "$(jq '.meta.fromWalk' <<<"$out")"
+
+# --- Extensionless ROMs ------------------------------------------------------
+
+# Most of a downloaded collection has no extension at all, and `${rom##*.}` on
+# a name with no dot returns the whole name -- which used to match nothing and
+# drop the file silently. The folder is the hint, per the roms/<system>/
+# convention.
+mkdir -p "$FIXTURE/roms/snes" "$FIXTURE/roms/mystery"
+touch "$FIXTURE/roms/snes/chronotrigger"
+touch "$FIXTURE/roms/snes/donkeykongcountry"
+out=$(run_scan)
+
+check "an extensionless ROM under roms/snes/ is found" \
+  "true" "$(jq '[.games[].title] | contains(["chronotrigger"])' <<<"$out")"
+
+check "the folder decides its extension" \
+  "sfc" "$(jq -r '.games[] | select(.title == "chronotrigger") | .ext' <<<"$out")"
+
+check "and therefore its core" \
+  "snes9x" "$(jq -r '.games[] | select(.title == "chronotrigger") | .coreName' <<<"$out")"
+
+# An empty file in a folder that names no system, with nothing for libmagic to
+# recognise, cannot be placed. It is left out rather than launched blind.
+touch "$FIXTURE/roms/mystery/whatisthis"
+out=$(run_scan)
+check "an unplaceable extensionless file is skipped, not guessed" \
+  "0" "$(jq '[.games[] | select(.title == "whatisthis")] | length' <<<"$out")"
+
+check "a filename with no dot never becomes its own extension" \
+  "0" "$(jq '[.games[] | select(.ext == "chronotrigger")] | length' <<<"$out")"
+
+# A real extension still wins over the folder it happens to sit in.
+touch "$FIXTURE/roms/snes/handheld.gb"
+out=$(run_scan)
+check "an explicit extension outranks the folder name" \
+  "gb" "$(jq -r '.games[] | select(.title == "handheld") | .ext' <<<"$out")"
+
+rm -rf "$FIXTURE/roms/snes" "$FIXTURE/roms/mystery"
 
 # --- Save states -------------------------------------------------------------
 
@@ -169,23 +225,39 @@ touch "$FIXTURE/ra/thumbnails/Nintendo - Super Nintendo Entertainment System/Nam
 
 out=$(run_scan)
 
-check "playlists take over from the walk entirely" \
-  "0" "$(jq '.meta.fromWalk' <<<"$out")"
+# A library is normally part scanned and part not, so the two sources union.
+# Suppressing the walk once a playlist existed hid every ROM the user had not
+# imported yet -- which was most of them.
+check "the walk still runs alongside a playlist" \
+  "true" "$(jq '.meta.fromWalk > 0' <<<"$out")"
 
 check "playlist entries are used" \
-  "1" "$(jq '.games | length' <<<"$out")"
+  "true" "$(jq '[.games[] | select(.title == "Super Mario World")] | length == 1' <<<"$out")"
+
+check "unscanned ROMs are not hidden by a playlist" \
+  "true" "$(jq '[.games[].title] | contains(["Pinball"])' <<<"$out")"
+
+check "a ROM in both sources appears exactly once" \
+  "true" "$(jq '.games | map(.rom) | (length == (unique | length))' <<<"$out")"
 
 check "a playlist entry whose ROM is gone is dropped" \
   "0" "$(jq '[.games[] | select(.title == "Ghost Entry")] | length' <<<"$out")"
 
 check "the playlist label wins over the filename" \
-  "Super Mario World" "$(jq -r '.games[0].title' <<<"$out")"
+  "true" "$(jq '[.games[].title] | contains(["Super Mario World"]) and (contains(["Super Mario World (USA)"]) | not)' <<<"$out")"
 
 check "box art is resolved from the playlist name" \
-  "true" "$(jq -r '.games[0].art | endswith("Named_Boxarts/Super Mario World.png")' <<<"$out")"
+  "true" "$(jq -r '.games[] | select(.title == "Super Mario World") | (.art | endswith("Named_Boxarts/Super Mario World.png"))' <<<"$out")"
 
 check "the system name comes from the playlist" \
-  "Nintendo - Super Nintendo Entertainment System" "$(jq -r '.games[0].system' <<<"$out")"
+  "Nintendo - Super Nintendo Entertainment System" \
+  "$(jq -r '.games[] | select(.title == "Super Mario World") | .system' <<<"$out")"
+
+# A walked ROM has no playlist to name its system, so it borrows the system
+# RetroArch attributes to the core that will run it -- otherwise the library
+# cannot be grouped or browsed by system at all.
+check "a walked ROM takes its system from the core that runs it" \
+  "Game Boy" "$(jq -r '.games[] | select(.title == "Pinball") | .system' <<<"$out")"
 
 # --- Which core runs the ROM -------------------------------------------------
 
@@ -208,7 +280,7 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
 LPL
 out=$(run_scan)
 check "DETECT falls through to the extension map" \
-  "snes9x" "$(jq -r '.games[0].coreName' <<<"$out")"
+  "snes9x" "$(jq -r '.games[] | select(.title == "Super Mario World") | .coreName' <<<"$out")"
 
 # A playlist pinned to one core outranks the extension map...
 cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
@@ -226,7 +298,7 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
 LPL
 out=$(run_scan)
 check "a playlist default core outranks the extension map" \
-  "gambatte" "$(jq -r '.games[0].coreName' <<<"$out")"
+  "gambatte" "$(jq -r '.games[] | select(.title == "Super Mario World") | .coreName' <<<"$out")"
 
 # ...and a pinned entry outranks the playlist default.
 cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
@@ -244,7 +316,7 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
 LPL
 out=$(run_scan)
 check "an entry's own core outranks the playlist default" \
-  "snes9x" "$(jq -r '.games[0].coreName' <<<"$out")"
+  "snes9x" "$(jq -r '.games[] | select(.title == "Super Mario World") | .coreName' <<<"$out")"
 
 # A core named by a playlist that is not installed must not be launched.
 cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
@@ -261,7 +333,7 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
 LPL
 out=$(run_scan)
 check "a core that is not installed falls through instead of launching" \
-  "snes9x" "$(jq -r '.games[0].coreName' <<<"$out")"
+  "snes9x" "$(jq -r '.games[] | select(.title == "Super Mario World") | .coreName' <<<"$out")"
 
 # Restore the playlist the later checks expect.
 cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
@@ -283,7 +355,7 @@ LPL
 echo 'not json at all' >"$FIXTURE/ra/playlists/Broken.lpl"
 out=$(run_scan)
 check "a malformed playlist does not take the scan down with it" \
-  "1" "$(jq '.games | length' <<<"$out")"
+  "true" "$(jq '[.games[].title] | contains(["Super Mario World"])' <<<"$out")"
 
 if (( failures )); then
   echo "scan-test: $passed passed, $failures failed"

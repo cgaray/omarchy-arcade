@@ -50,57 +50,71 @@ bindd = SUPER, G, Arcade, exec, omarchy-shell io.garay.arcade toggle
 
 Arcade reads two sources, in this order:
 
-1. **RetroArch playlists** (`~/.config/retroarch/playlists/*.lpl`). If you have
-   run RetroArch's scanner these win — they carry the real system name and
-   unlock box art.
-2. **A walk of your ROM folder**, `~/Games/roms` on a stock Omarchy install.
-   The fallback for a fresh setup.
+1. **RetroArch playlists** (`~/.config/retroarch/playlists/*.lpl`), which carry
+   the real title, the system name, and box art.
+2. **A walk of your ROM folder**, `~/Games/roms` on a stock Omarchy install,
+   including subfolders.
+
+The two are a union, not a fallback. Importing content into RetroArch is
+something people do a few games at a time, so a library is normally part
+scanned and part not — letting a playlist suppress the walk would hide every
+ROM you had not got round to importing. A ROM in both keeps the playlist's
+better metadata and appears once.
 
 Drop ROMs in `~/Games/roms` and press `r`. That is the whole setup.
 
 Box art comes from RetroArch's own thumbnail cache — Arcade downloads nothing.
 
+### ROMs with no extension
+
+Most of a collection downloaded as a set has no file extension at all. Arcade
+places those two ways: the folder they sit in, following the `roms/<system>/`
+convention, and failing that libmagic, which recognises most ROM images by
+content. A file neither can place is left out.
+
+For a squashed filename like `thelegendofzeldaalinktothepast`, Arcade reads
+the name out of the ROM header instead — `The Legend of Zelda`. A filename
+someone clearly typed is never overwritten.
+
+### Browsing by system
+
+Once a library spans more than one system, a filter row appears above it:
+`All · 101`, `NES · 49`, `SNES · 52`. Click one, or press `s` to walk them.
+Systems come from the playlist where there is one, and otherwise from the
+system RetroArch attributes to the core that will run the game.
+
 ## Which emulator runs a game
 
-Every row shows it, next to the system: `SNES · snes9x`. That is the core
-Arcade will pass to `retroarch -L`, decided before you press anything.
+Every row shows it next to the system — `SNES · snes9x` — so the core is
+visible before you press anything, not discovered when the emulator opens.
 
-Note that a playlist usually does *not* answer this. Scanning a directory in
-RetroArch writes `"core_path": "DETECT"` on every entry, meaning "decide at
-launch" — so for most libraries the extension map below is what actually picks
-the emulator. Arcade resolves it in this order, most specific first:
-
-1. **The core the playlist entry is pinned to**, if that core is installed.
-   You get this by setting a core on an entry in RetroArch itself.
-2. **The core the whole playlist is pinned to** (`default_core_path`).
-3. **The extension map**, which `cores.conf` can override.
-
-A ROM that none of the three can answer for is left out of the library rather
-than launched under a guess. A core named by a playlist but not installed
-falls through to the next step instead of failing at launch.
-
-### Extensions Arcade will not guess at
-
-`.bin`, `.iso`, and `.zip` belong to several systems each, and RetroArch given
-the wrong core does not fail cleanly: it opens a black window and sits there.
-So an ambiguous extension is skipped instead of guessed at.
-
-The built-in map covers the unambiguous ones: `sfc/smc/swc/fig` → snes9x,
-`nes/fds/unf/unif` → mesen, `gb/gbc` → gambatte, `gba` → mgba,
-`md/smd/gen/sms/gg` → genesis_plus_gx, `n64/z64/v64` → mupen64plus_next,
-`nds` → melonds, `pce` → mednafen_pce_fast, `cue/chd/pbp` → mednafen_psx_hw.
-
-If your library is unambiguous, claim them in
-`~/.config/omarchy/arcade/cores.conf`:
+Arcade carries no table of opinions about which core is best. RetroArch ships
+a `.info` file per core declaring what it supports, and that is the only
+honest source for what your machine can actually run. Several cores usually
+claim the same extension, and choosing between them is yours to make: the
+**Cores** section at the bottom of the panel lists every extension in your
+library that more than one installed core can open, with a dropdown of the
+candidates. Picking one writes `~/.config/omarchy/arcade/cores.conf`, which
+you can also edit by hand:
 
 ```
 # one "ext = core" per line
-zip = snes9x
-bin = mednafen_psx_hw
+sfc = snes9x
+zip = mame
 ```
 
-An entry or playlist pinned to a core still wins over `cores.conf`; the file
-only settles cases nothing else answered.
+Note that a playlist usually does *not* answer the question. Scanning a
+directory in RetroArch writes `"core_path": "DETECT"` on every entry, meaning
+"decide at launch". The full order, most specific first:
+
+1. **The core the playlist entry is pinned to**, if it is installed.
+2. **The core the whole playlist is pinned to** (`default_core_path`).
+3. **Your choice in `cores.conf`.**
+4. **The first candidate** RetroArch's `.info` files offer, so the game is
+   launchable while the choice is still outstanding.
+
+A core named by a playlist but not installed falls through instead of failing
+at launch, and a ROM nothing can place is left out rather than guessed at.
 
 ## Keys
 
@@ -109,6 +123,7 @@ only settles cases nothing else answered.
 | `↑` `↓` | Move |
 | `Enter` | Play, resuming the save state if there is one |
 | `f` | Start fresh, ignoring the save state |
+| `s` | Next system (`S` for previous) |
 | `/` | Jump to search |
 | `r` | Rescan |
 | `Esc` | Clear the search, then close |
@@ -132,6 +147,7 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 | Path | What |
 |---|---|
 | `Panel.qml` | The bar button and its popup. All UI. |
+| `bin/omarchy-arcade-cores` | Reads RetroArch's core `.info` files; records core choices. |
 | `Library.js` | Filtering, ranking, Continue selection, system names. Pure, tested. |
 | `bin/omarchy-arcade-scan` | Builds the library as JSON. |
 | `bin/omarchy-arcade-launch` | Launches a game and holds the desktop still. |
@@ -151,17 +167,20 @@ Both scripts run standalone:
 ```
 
 Manifest validation, `bash -n`, `qmllint` on `Library.js`, a bar-widget contract
-check, 24 unit tests over `Library.js`, and 29 integration tests that run the
+check, 40 unit tests over `Library.js`, and 38 integration tests that run the
 scanner against a fixture library — including the full core-precedence chain,
-`DETECT` entries, uninstalled cores, save states in per-core subdirectories,
-dead playlist entries, malformed playlists, and filenames with spaces and
-apostrophes. No display, no running shell, no emulator.
+`DETECT` entries, uninstalled cores, extensionless ROMs, save states in
+per-core subdirectories, dead playlist entries, malformed playlists, and
+filenames with spaces and apostrophes. The fixture ships its own `.info` files
+so results do not depend on which cores the machine happens to have. No
+display, no running shell, no emulator.
 
 ## Status
 
 Early, but working end to end: the bar widget, the Continue shelf with save
-state thumbnails, box art, search, both library sources, and the desktop
-integration.
+state thumbnails, box art, search, per-system browsing, the core picker, both
+library sources, and the desktop integration. If RetroArch is not installed,
+the panel says so and offers Omarchy's own installer.
 
 Not yet: Steam, Lutris, and Heroic as additional sources — the scanner is
 shaped for them, each being a function that appends to the same record shape.

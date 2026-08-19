@@ -122,6 +122,46 @@ test("limit is honoured", () => {
   assert.strictEqual(Library.filterGames(games, "", 2).length, 2)
 })
 
+// --- systemsOf and system filtering -----------------------------------------
+
+test("systemsOf counts each system and shortens its name", () => {
+  const games = [
+    game({ system: "Nintendo - Super Nintendo Entertainment System" }),
+    game({ system: "Nintendo - Super Nintendo Entertainment System" }),
+    game({ system: "Nintendo Entertainment System" })
+  ]
+  const out = Library.systemsOf(games)
+  assert.deepStrictEqual(out.map((s) => [s.label, s.count]), [["NES", 1], ["SNES", 2]])
+})
+
+test("a game with no system is grouped as Unknown rather than dropped", () => {
+  const out = Library.systemsOf([game({ system: "" })])
+  assert.deepStrictEqual(out.map((s) => [s.system, s.count]), [["Unknown", 1]])
+})
+
+test("the system filter restricts the library", () => {
+  const games = [
+    game({ title: "Zelda", system: "SNES" }),
+    game({ title: "Metroid", system: "NES" })
+  ]
+  const out = Library.filterGames(games, "", 100, "SNES")
+  assert.deepStrictEqual(out.map((g) => g.title), ["Zelda"])
+})
+
+test("searching inside a system stays inside it", () => {
+  const games = [
+    game({ title: "Mario Kart", system: "SNES" }),
+    game({ title: "Mario Bros", system: "NES" })
+  ]
+  const out = Library.filterGames(games, "mario", 100, "NES")
+  assert.deepStrictEqual(out.map((g) => g.title), ["Mario Bros"])
+})
+
+test("no system filter means the whole library", () => {
+  const games = [game({ system: "SNES" }), game({ system: "NES" })]
+  assert.strictEqual(Library.filterGames(games, "", 100, "").length, 2)
+})
+
 // --- resumableGames ---------------------------------------------------------
 
 test("only games with a save state reach the Continue shelf", () => {
@@ -145,6 +185,37 @@ test("Continue is ordered most-recent first", () => {
     game({ title: "Newer", resumeSlot: "0", resumeAt: 900 })
   ]
   assert.deepStrictEqual(Library.resumableGames(games).map((g) => g.title), ["Newer", "Older"])
+})
+
+// --- prettyTitle ------------------------------------------------------------
+
+test("an all-caps ROM header title is title-cased", () => {
+  assert.strictEqual(Library.prettyTitle("ALADDIN"), "Aladdin")
+  assert.strictEqual(Library.prettyTitle("CHRONO TRIGGER"), "Chrono Trigger")
+})
+
+test("minor words stay lowercase, except leading", () => {
+  assert.strictEqual(Library.prettyTitle("THE LEGEND OF ZELDA"), "The Legend of Zelda")
+})
+
+test("hyphenated names capitalise both halves", () => {
+  assert.strictEqual(Library.prettyTitle("F-ZERO"), "F-Zero")
+})
+
+test("a title someone actually wrote is never touched", () => {
+  assert.strictEqual(Library.prettyTitle("Super Mario World (USA)"), "Super Mario World (USA)")
+  assert.strictEqual(Library.prettyTitle("Bowser's Kaizo Conspiracy v1.2"), "Bowser's Kaizo Conspiracy v1.2")
+  assert.strictEqual(Library.prettyTitle("balloonfight"), "balloonfight")
+})
+
+test("digits and empty input survive", () => {
+  assert.strictEqual(Library.prettyTitle("1942"), "1942")
+  assert.strictEqual(Library.prettyTitle(""), "")
+})
+
+test("parseLibrary applies it to incoming titles", () => {
+  const raw = JSON.stringify({ games: [game({ title: "SUPER METROID" })] })
+  assert.strictEqual(Library.parseLibrary(raw).games[0].title, "Super Metroid")
 })
 
 // --- shortSystem ------------------------------------------------------------
@@ -191,6 +262,41 @@ test("a system and core that say the same thing are not repeated", () => {
 
 test("systemAndCore tolerates a missing game", () => {
   assert.strictEqual(Library.systemAndCore(null), "")
+})
+
+// --- extension pickers ------------------------------------------------------
+
+const ext = (over) =>
+  Object.assign({ ext: "sfc", candidates: [{ id: "snes9x" }, { id: "bsnes" }], chosen: "", resolved: "bsnes" },
+    over || {})
+
+test("parseLibrary carries the extension table through", () => {
+  const raw = JSON.stringify({ games: [game()], extensions: [ext()] })
+  const r = Library.parseLibrary(raw)
+  assert.strictEqual(r.extensions.length, 1)
+  assert.strictEqual(r.extensions[0].ext, "sfc")
+  assert.strictEqual(r.extensions[0].candidates.length, 2)
+})
+
+test("a library with no extension table is not an error", () => {
+  const r = Library.parseLibrary(JSON.stringify({ games: [game()] }))
+  assert.strictEqual(r.error, "")
+  assert.deepStrictEqual(r.extensions, [])
+})
+
+test("an extension only one core can open is not a choice", () => {
+  const only = [ext({ candidates: [{ id: "mgba" }] })]
+  assert.strictEqual(Library.undecidedExtensions(only).length, 0)
+  assert.strictEqual(Library.choosableExtensions(only).length, 0)
+})
+
+test("an extension several cores claim is undecided until it is chosen", () => {
+  assert.strictEqual(Library.undecidedExtensions([ext()]).length, 1)
+  assert.strictEqual(Library.undecidedExtensions([ext({ chosen: "snes9x" })]).length, 0)
+})
+
+test("a decided extension is still choosable, so it can be changed back", () => {
+  assert.strictEqual(Library.choosableExtensions([ext({ chosen: "snes9x" })]).length, 1)
 })
 
 // --- formatAgo --------------------------------------------------------------
