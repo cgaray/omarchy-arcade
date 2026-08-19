@@ -49,6 +49,13 @@ assert.strictEqual(rebuilt.systemFilter, "")
 assert.strictEqual(rebuilt.continueRows.length, 1)
 assert.strictEqual(rebuilt.libraryRows.length, 2)
 
+const saved = Session.rebuild([
+  game({ resumeAt: 100, resumeSlot: "0" }),
+  game({ key: "/roms/other.sfc", rom: "/roms/other.sfc" })
+], "", "", 40, 0, true)
+assert.strictEqual(saved.libraryRows.length, 1)
+assert.strictEqual(saved.libraryRows[0].resumeSlot, "0")
+
 assert.strictEqual(Session.fingerprintChanged("", "abc"), false)
 assert.strictEqual(Session.fingerprintChanged("abc", "abc"), false)
 assert.strictEqual(Session.fingerprintChanged("abc", "def"), true)

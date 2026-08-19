@@ -6,8 +6,9 @@ function parseScan(raw) {
   return Library.parseLibrary(raw)
 }
 
-function rebuild(games, query, system, libraryLimit, continueLimit) {
+function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly) {
   var list = games || []
+  if (savedOnly) list = list.filter(function (game) { return game.resumeAt > 0 })
   var wanted = String(system || "")
   if (wanted) {
     var systems = Library.systemsOf(list)

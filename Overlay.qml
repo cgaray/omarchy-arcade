@@ -40,6 +40,7 @@ Item {
   property bool cursorActive: false
   property var sessionSettings: ({})
   property bool helpOpen: false
+  property bool savedOnly: false
 
   property var games: []
   property var extensions: []
@@ -50,7 +51,11 @@ Item {
   property double nowSeconds: 0
 
   readonly property bool retroarchMissing: scanMeta.retroarchInstalled === false
-  readonly property var systems: Library.systemsOf(root.games)
+  readonly property var systems: Library.systemsOf(root.savedOnly
+    ? root.games.filter(function (game) { return game.resumeAt > 0 })
+    : root.games)
+  readonly property var selectedGame:
+    root.visibleGames.length > root.selectedIndex ? root.visibleGames[root.selectedIndex] : null
 
   // Shares the [menu] surface tokens, so a theme that styles the Omarchy menu
   // styles this too.
@@ -79,6 +84,7 @@ Item {
     }
     root.opened = true
     root.filterText = ""
+    root.savedOnly = false
     // The bar button can hand over the system you were already looking at.
     root.systemFilter = String(args.system || "")
     if (args.settings) root.sessionSettings = args.settings
@@ -122,7 +128,7 @@ Item {
   }
 
   function rebuild() {
-    var derived = Session.rebuild(root.games, root.filterText, root.systemFilter, 2000, 0)
+    var derived = Session.rebuild(root.games, root.filterText, root.systemFilter, 2000, 0, root.savedOnly)
     root.systemFilter = derived.systemFilter
     root.visibleGames = derived.libraryRows
     if (root.selectedIndex >= root.visibleGames.length)
@@ -137,6 +143,12 @@ Item {
     root.filterText = next
     root.selectedIndex = 0
     root.cursorActive = true
+    root.rebuild()
+  }
+
+  function setSavedOnly(next) {
+    root.savedOnly = next
+    root.selectedIndex = 0
     root.rebuild()
   }
 
@@ -309,6 +321,7 @@ Item {
           } else if (event.key === Qt.Key_Escape) {
             if (root.filterText) root.setFilter("")
             else if (root.systemFilter) root.setSystem("")
+            else if (root.savedOnly) root.setSavedOnly(false)
             else root.dismiss()
             event.accepted = true
           } else if (event.key === Qt.Key_Tab) {
@@ -322,6 +335,9 @@ Item {
             event.accepted = true
           } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_Backspace) {
             root.setFilter("")
+            event.accepted = true
+          } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_S) {
+            root.setSavedOnly(!root.savedOnly)
             event.accepted = true
           } else if (!event.modifiers && event.text === "j") {
             root.move(0, 1)
@@ -416,6 +432,7 @@ Item {
                   return root.visibleGames.length
                     + (root.visibleGames.length === 1 ? " game" : " games")
                     + (root.systemFilter ? " · " + root.systemFilter : "")
+                    + (root.savedOnly ? " · saves" : "")
                 }
                 color: root.dim
                 font.family: root.fontFamily
@@ -477,6 +494,98 @@ Item {
                 fontFamily: root.fontFamily
                 fontSize: Style.font.caption
                 onClicked: root.setSystem(modelData.system)
+              }
+            }
+          }
+        }
+
+        // The selected tile has a persistent reading surface, so keyboard
+        // browsing never requires opening a game just to inspect its details.
+        Item {
+          id: inspector
+          width: parent.width
+          height: root.selectedGame ? Style.space(92) : 0
+          visible: root.selectedGame !== null
+          clip: true
+
+          Rectangle {
+            anchors.fill: parent
+            radius: root.cornerRadius
+            color: root.selectedBackground
+            border.width: Math.max(1, Style.space(1))
+            border.color: root.accent
+
+            Row {
+              anchors.fill: parent
+              anchors.margins: Style.space(10)
+              spacing: Style.space(12)
+
+              Rectangle {
+                width: Style.space(100)
+                height: parent.height
+                radius: root.cornerRadius
+                color: Util.alpha(root.foreground, 0.08)
+                clip: true
+
+                Image {
+                  id: inspectorArt
+                  anchors.fill: parent
+                  source: root.selectedGame ? Util.fileUrl(root.selectedGame.art) : ""
+                  fillMode: Image.PreserveAspectCrop
+                  asynchronous: true
+                  visible: status === Image.Ready
+                }
+
+                Text {
+                  anchors.centerIn: parent
+                  visible: inspectorArt.status !== Image.Ready
+                  text: "󰊴"
+                  color: root.foreground
+                  opacity: 0.28
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.displayLarge
+                }
+              }
+
+              Column {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - Style.space(112)
+                spacing: Style.space(3)
+
+                Text {
+                  width: parent.width
+                  text: root.selectedGame ? root.selectedGame.title : ""
+                  color: root.selectedText
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.heading
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  width: parent.width
+                  text: root.selectedGame ? Library.systemAndCore(root.selectedGame) : ""
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  width: parent.width
+                  text: {
+                    if (!root.selectedGame) return ""
+                    var g = root.selectedGame
+                    var bits = []
+                    var summary = Library.playSummary(g, root.nowSeconds)
+                    if (summary) bits.push(summary)
+                    if (g.resumeAt > 0) bits.push("Enter resumes")
+                    return bits.join(" · ")
+                  }
+                  color: root.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
               }
             }
           }
@@ -689,7 +798,7 @@ Item {
           id: footer
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
-          text: "↑↓←→ / hjkl move   ⏎ resume   ⇧⏎ fresh   ⇥ system   ? help"
+          text: "↑↓←→ / hjkl move   ⏎ resume   ⇧⏎ fresh   Ctrl+S saves   ⇥ system   ? help"
           color: root.dim
           opacity: 0.8
           font.family: root.fontFamily
@@ -724,7 +833,7 @@ Item {
 
           Text {
             width: parent.width
-            text: "↑↓←→ or hjkl move    Enter resume    Shift+Enter fresh    type search\nTab / Shift+Tab systems    Ctrl+0 all, Ctrl+1..9 jump system    Alt+number also works    F5 or Ctrl+R refresh    Ctrl+Backspace clear    Esc back"
+            text: "↑↓←→ or hjkl move    Enter resume    Shift+Enter fresh    type search\nCtrl+S saved states    Tab / Shift+Tab systems    Ctrl+0 all, Ctrl+1..9 jump system    F5 refresh    Ctrl+Backspace clear    Esc back"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
