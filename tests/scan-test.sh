@@ -183,6 +183,15 @@ check "states in a per-core subdirectory are found" \
 check "a subdirectory state's thumbnail is found" \
   "true" "$(jq -r '.games[] | select(.title == "Super Mario World (USA)") | (.resumeArt | endswith(".state1.png"))' <<<"$out")"
 
+# States in a core directory must not collide with a same-basename state for a
+# different core. The core-specific state is newer and should win for Pinball.
+mkdir -p "$FIXTURE/ra/states/Gambatte"
+sleep 1
+touch "$FIXTURE/ra/states/Gambatte/Pinball.state2"
+out=$(run_scan)
+check "core-specific states beat same-basename fallback states" \
+  "2" "$(jq -r '.games[] | select(.title == "Pinball") | .resumeSlot' <<<"$out")"
+
 check "a state thumbnail is never mistaken for a state" \
   "0" "$(jq '[.games[] | select(.resumeSlot | tostring | endswith("png"))] | length' <<<"$out")"
 
@@ -391,6 +400,11 @@ check "a new save state changes the fingerprint, so Continue updates" \
 before=$(fp)
 printf 'gb = gambatte\n' >>"$FIXTURE/config/omarchy/arcade/cores.conf"
 check "a core choice changes the fingerprint" \
+  "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
+
+before=$(fp)
+printf '# changed by test\n' >>"$FIXTURE/info/gambatte_libretro.info"
+check "core metadata changes the fingerprint" \
   "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
 
 if (( failures )); then

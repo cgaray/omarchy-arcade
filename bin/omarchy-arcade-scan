@@ -21,6 +21,7 @@ RA_CFG="$RA_CONFIG_DIR/retroarch.cfg"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-arcade"
 PLAYS_FILE="$STATE_DIR/plays.json"
 CORES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/arcade/cores.conf"
+INFO_DIR=""
 RECORDS_FILE=""
 
 die() {
@@ -52,6 +53,7 @@ PLAYLIST_DIR=$(ra_cfg playlist_directory "$RA_CONFIG_DIR/playlists")
 SAVESTATE_DIR=$(ra_cfg savestate_directory "$RA_CONFIG_DIR/states")
 THUMBNAIL_DIR=$(ra_cfg thumbnails_directory "$RA_CONFIG_DIR/thumbnails")
 CORE_DIR=$(ra_cfg libretro_directory "/usr/lib/libretro")
+INFO_DIR=$(ra_cfg libretro_info_path "/usr/share/libretro/info")
 ROM_DIR="${ARCADE_ROM_DIR:-$(ra_cfg rgui_browser_directory "$HOME/Games/roms")}"
 
 # Which cores can open which extension comes from RetroArch's own .info
@@ -91,6 +93,7 @@ load_cores() {
   done < <(jq -r '.cores[] | "\(.id)\t\(.system)"' <<<"$raw" 2>/dev/null)
 
   CORES_JSON="$raw"
+  INFO_DIR=$(jq -r '.meta.infoDir // ""' <<<"$raw" 2>/dev/null)
 }
 
 CORES_JSON="{}"
@@ -121,10 +124,17 @@ core_path_for() {
 # basename rather than guessing at a path per game.
 declare -A STATE_SLOT STATE_MTIME STATE_THUMB
 
+state_core_key() {
+  local name="$1"
+  name="${name##*/}"
+  name="${name%_libretro.so}"
+  tr '[:upper:]' '[:lower:]' <<<"$name"
+}
+
 index_states() {
   [[ -d $SAVESTATE_DIR ]] || return 0
 
-  local f fname base slot mtime
+  local f fname base slot mtime relative state_core key
   while IFS= read -r -d '' f; do
     fname="${f##*/}"
     # `.state.png` is the thumbnail beside a state, not a state itself.
@@ -140,11 +150,18 @@ index_states() {
       continue
     fi
 
+    relative="${f#"$SAVESTATE_DIR/"}"
+    if [[ $relative == */* ]]; then
+      state_core=$(state_core_key "${relative%%/*}")
+    else
+      state_core=""
+    fi
+    key="$state_core|$base"
     mtime=$(stat -c %Y "$f" 2>/dev/null) || continue
-    if [[ -z ${STATE_MTIME[$base]:-} ]] || (( mtime > ${STATE_MTIME[$base]} )); then
-      STATE_MTIME[$base]=$mtime
-      STATE_SLOT[$base]=$slot
-      if [[ -f "$f.png" ]]; then STATE_THUMB[$base]="$f.png"; else STATE_THUMB[$base]=""; fi
+    if [[ -z ${STATE_MTIME[$key]:-} ]] || (( mtime > ${STATE_MTIME[$key]} )); then
+      STATE_MTIME[$key]=$mtime
+      STATE_SLOT[$key]=$slot
+      if [[ -f "$f.png" ]]; then STATE_THUMB[$key]="$f.png"; else STATE_THUMB[$key]=""; fi
     fi
   done < <(find "$SAVESTATE_DIR" -type f -print0 2>/dev/null)
 }
@@ -154,11 +171,17 @@ index_states() {
 # no integer names, and reusing a negative integer for it collides with the
 # "no state at all" sentinel.
 newest_state() {
-  local rom="$1"
+  local rom="$1" core="${2:-}"
   local base="${rom##*/}"
   base="${base%.*}"
-  [[ -n ${STATE_MTIME[$base]:-} ]] || return 1
-  printf '%s\t%s\t%s' "${STATE_SLOT[$base]}" "${STATE_MTIME[$base]}" "${STATE_THUMB[$base]}"
+  local core_key
+  core_key=$(state_core_key "$core")
+  local key="$core_key|$base"
+  if [[ -z ${STATE_MTIME[$key]:-} ]]; then
+    key="|$base"
+  fi
+  [[ -n ${STATE_MTIME[$key]:-} ]] || return 1
+  printf '%s\t%s\t%s' "${STATE_SLOT[$key]}" "${STATE_MTIME[$key]}" "${STATE_THUMB[$key]}"
 }
 
 # RetroArch stores box art under the playlist's own name. Only the playlist
@@ -448,7 +471,7 @@ add_game() {
   art=$(boxart_for "$db" "$label") || art=""
 
   local slot="" resume_at=0 resume_art="" state
-  if state=$(newest_state "$rom"); then
+  if state=$(newest_state "$rom" "$core"); then
     IFS=$'\t' read -r slot resume_at resume_art <<<"$state"
   fi
 
@@ -494,9 +517,13 @@ add_game() {
 # to keep alive across a shell restart. A 46ms find is none of those things.
 fingerprint() {
   {
+    [[ -f $RA_CFG ]] && { printf 'retroarch.cfg\t'; <"$RA_CFG"; }
     find "$ROM_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$SAVESTATE_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -printf '%T@\t%s\t%p\n' 2>/dev/null
+    find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' -printf '%T@\t%s\t%p\n' 2>/dev/null
+    find "$INFO_DIR" -maxdepth 1 -type f -name '*.info' -printf '%T@\t%s\t%p\n' 2>/dev/null
+    find "$THUMBNAIL_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
     # Folded in by content, not mtime: stat's %Y has whole-second resolution,
     # so a choice written in the same second as the previous check would have
     # produced an identical signature and stayed invisible for good. The ROM
