@@ -5,6 +5,7 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "Library.js" as Library
+import "ArcadeSession.js" as Session
 
 // The browsing half of Arcade. The bar popup is for picking up where you left
 // off in a few keystrokes; this is for looking at a hundred games and their
@@ -37,6 +38,7 @@ Item {
   property string systemFilter: ""
   property int selectedIndex: 0
   property bool cursorActive: false
+  property var sessionSettings: ({})
 
   property var games: []
   property var extensions: []
@@ -78,6 +80,7 @@ Item {
     root.filterText = ""
     // The bar button can hand over the system you were already looking at.
     root.systemFilter = String(args.system || "")
+    if (args.settings) root.sessionSettings = args.settings
     root.selectedIndex = 0
     root.cursorActive = true
     root.refresh()
@@ -108,7 +111,7 @@ Item {
   function applyScan(raw) {
     root.scanning = false
     root.lastFingerprint = ""
-    var parsed = Library.parseLibrary(raw)
+    var parsed = Session.parseScan(raw)
     root.loadError = parsed.error
     root.games = parsed.games
     root.extensions = parsed.extensions
@@ -117,15 +120,10 @@ Item {
   }
 
   function rebuild() {
-    if (root.systemFilter) {
-      var stillThere = false
-      for (var i = 0; i < root.systems.length; i++)
-        if (root.systems[i].system === root.systemFilter) stillThere = true
-      if (!stillThere) root.systemFilter = ""
-    }
-
-    var out = Library.filterGames(root.games, root.filterText, 2000, root.systemFilter)
-    root.visibleGames = out
+    var derived = Session.rebuild(root.games, root.filterText, root.systemFilter, 2000, 0)
+    root.systemFilter = derived.systemFilter
+    root.visibleGames = derived.libraryRows
+    var out = derived.libraryRows
 
     tileModel.clear()
     for (var j = 0; j < out.length; j++) tileModel.append({ gameIndex: j })
@@ -189,12 +187,8 @@ Item {
 
   function launch(game, resume) {
     if (!game) return
-    var args = [
-      root.pluginDir + "/bin/omarchy-arcade-launch",
-      "--core", game.core,
-      "--rom", game.rom
-    ]
-    if (resume && game.resumeSlot) args.push("--slot", game.resumeSlot)
+    var args = Session.launchRequest(game, root.sessionSettings, resume,
+      root.pluginDir + "/bin/omarchy-arcade-launch")
     root.dismiss()
     Quickshell.execDetached(args)
   }
@@ -216,6 +210,7 @@ Item {
   Process {
     id: watchProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan", "--fingerprint"]
+    environment: Session.scannerEnvironment(root.sessionSettings)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -224,7 +219,7 @@ Item {
         // The first reading establishes a baseline rather than counting as a
         // change, so opening the panel does not immediately rescan twice.
         if (root.lastFingerprint === "") { root.lastFingerprint = next; return }
-        if (next === root.lastFingerprint) return
+        if (!Session.fingerprintChanged(root.lastFingerprint, next)) return
         root.lastFingerprint = next
         root.refresh()
       }
@@ -244,6 +239,7 @@ Item {
   Process {
     id: scanProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan"]
+    environment: Session.scannerEnvironment(root.sessionSettings)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyScan(text)

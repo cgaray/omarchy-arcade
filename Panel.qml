@@ -5,6 +5,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Library.js" as Library
+import "ArcadeSession.js" as Session
 
 // Arcade lives in the bar because that is where you are when you decide to
 // stop working. The panel's whole argument is the Continue shelf: every row
@@ -130,7 +131,7 @@ Panel {
   function applyScan(raw) {
     root.scanning = false
     root.lastFingerprint = ""
-    var parsed = Library.parseLibrary(raw)
+    var parsed = Session.parseScan(raw)
     root.loadError = parsed.error
     root.games = parsed.games
     root.extensions = parsed.extensions
@@ -139,19 +140,10 @@ Panel {
   }
 
   function rebuild() {
-    // A text search means the user is hunting one title, so the shelf steps
-    // out of the way. A system filter is a place to be, so the shelf follows
-    // them into it rather than vanishing.
-    root.continueRows = root.query ? [] : Library.resumableIn(root.games, root.systemFilter, 6)
-    // A filter that survives a rescan but names a system no longer present
-    // would silently show an empty library, so drop it.
-    if (root.systemFilter) {
-      var stillThere = false
-      for (var s = 0; s < root.systems.length; s++)
-        if (root.systems[s].system === root.systemFilter) stillThere = true
-      if (!stillThere) root.systemFilter = ""
-    }
-    root.libraryRows = Library.filterGames(root.games, root.query, root.maxLibraryRows, root.systemFilter)
+    var derived = Session.rebuild(root.games, root.query, root.systemFilter, root.maxLibraryRows, 6)
+    root.systemFilter = derived.systemFilter
+    root.continueRows = derived.continueRows
+    root.libraryRows = derived.libraryRows
     if (root.cursorIndex >= root.cursorTargets.length)
       root.cursorIndex = Math.max(0, root.cursorTargets.length - 1)
   }
@@ -227,19 +219,21 @@ Panel {
   // "f" key are the way back to a title screen.
   function launch(game, resume) {
     if (!game) return
-    var args = [
-      root.pluginDir + "/bin/omarchy-arcade-launch",
-      "--core", game.core,
-      "--rom", game.rom
-    ]
-    if (resume && game.resumeSlot) args.push("--slot", game.resumeSlot)
-    if (!root.setting("silenceNotifications", true)) args.push("--keep-notifications")
-    if (!root.setting("stayAwake", true)) args.push("--allow-idle")
+    var args = Session.launchRequest(game, root.sessionSettings(), resume,
+      root.pluginDir + "/bin/omarchy-arcade-launch")
     root.close()
     Quickshell.execDetached(args)
     // The scan that follows the game is what moves it to the top of Continue,
     // so schedule one rather than waiting for the interval to come around.
     playPoll.restart()
+  }
+
+  function sessionSettings() {
+    return {
+      romDir: String(root.setting("romDir", "") || ""),
+      silenceNotifications: root.setting("silenceNotifications", true),
+      stayAwake: root.setting("stayAwake", true)
+    }
   }
 
   function activateCursor(resume) {
@@ -283,7 +277,7 @@ Panel {
     root.close()
     Quickshell.execDetached([
       root.omarchyBin + "/omarchy-shell", "-q", "shell", "summon", root.pluginId,
-      JSON.stringify({ system: root.systemFilter })
+      JSON.stringify({ system: root.systemFilter, settings: root.sessionSettings() })
     ])
   }
 
@@ -298,7 +292,7 @@ Panel {
   Process {
     id: scanProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan"]
-    environment: ({ "ARCADE_ROM_DIR": String(root.setting("romDir", "") || "") })
+    environment: Session.scannerEnvironment(root.sessionSettings())
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyScan(text)
@@ -317,6 +311,7 @@ Panel {
   Process {
     id: watchProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan", "--fingerprint"]
+    environment: Session.scannerEnvironment(root.sessionSettings())
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -325,7 +320,7 @@ Panel {
         // The first reading establishes a baseline rather than counting as a
         // change, so opening the panel does not immediately rescan twice.
         if (root.lastFingerprint === "") { root.lastFingerprint = next; return }
-        if (next === root.lastFingerprint) return
+        if (!Session.fingerprintChanged(root.lastFingerprint, next)) return
         root.lastFingerprint = next
         root.refresh()
       }
