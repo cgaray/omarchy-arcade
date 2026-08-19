@@ -21,6 +21,7 @@ RA_CFG="$RA_CONFIG_DIR/retroarch.cfg"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-arcade"
 PLAYS_FILE="$STATE_DIR/plays.json"
 CORES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/arcade/cores.conf"
+RECORDS_FILE=""
 
 die() {
   echo "omarchy-arcade-scan: $*" >&2
@@ -174,12 +175,14 @@ boxart_for() {
 }
 
 emit_games() {
-  local games_json="[]"
   local playlist_count=0 walk_count=0
   # ROMs a playlist already claimed. The walk consults this so the two sources
   # union instead of competing: a scanned game keeps its playlist metadata,
   # and an unscanned one still shows up.
   declare -A SEEN_ROM
+
+  RECORDS_FILE=$(mktemp -t omarchy-arcade-scan-XXXXXX.jsonl) || die "could not create scan records"
+  trap 'rm -f "$RECORDS_FILE"' EXIT
 
   index_states
   load_cores || true
@@ -226,9 +229,10 @@ emit_games() {
           || core=$(core_path_for "$(ext_core_for "$rom")") \
           || continue
 
-        games_json=$(add_game "$games_json" "$rom" "$label" "${db%.lpl}" "$core") || true
-        SEEN_ROM["$rom"]=1
-        playlist_count=$((playlist_count + 1))
+        if add_game "$rom" "$label" "${db%.lpl}" "$core"; then
+          SEEN_ROM["$rom"]=1
+          playlist_count=$((playlist_count + 1))
+        fi
       done < <(jq -c '.[]' <<<"$entries" 2>/dev/null)
     done < <(find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -print0 2>/dev/null)
   fi
@@ -250,10 +254,24 @@ emit_games() {
 
       local label
       label=$(walk_label "$rom")
-      games_json=$(add_game "$games_json" "$rom" "$label" "" "$core") || true
-      walk_count=$((walk_count + 1))
+      if add_game "$rom" "$label" "" "$core"; then
+        walk_count=$((walk_count + 1))
+      fi
     done < <(find "$ROM_DIR" -type f -print0 2>/dev/null)
   fi
+
+  local plays_json="{}" games_json="[]"
+  if [[ -f $PLAYS_FILE ]]; then
+    plays_json=$(jq -c 'if type == "object" then . else {} end' "$PLAYS_FILE" 2>/dev/null) || plays_json="{}"
+  fi
+  games_json=$(jq -cs --argjson plays "$plays_json" '
+    map(. as $game
+      | ($plays[$game.rom] // {}) as $play
+      | $game + {
+          lastPlayed: (($play.lastPlayed // 0) | floor),
+          playSeconds: (($play.seconds // 0) | floor),
+          playCount: (($play.count // 0) | floor)
+        })' "$RECORDS_FILE") || games_json="[]"
 
   jq -n \
     --argjson games "$games_json" \
@@ -424,7 +442,7 @@ ext_ambiguous() {
 }
 
 add_game() {
-  local acc="$1" rom="$2" label="$3" db="$4" core="$5"
+  local rom="$1" label="$2" db="$3" core="$4"
 
   local art=""
   art=$(boxart_for "$db" "$label") || art=""
@@ -437,20 +455,6 @@ add_game() {
   local core_name="${core##*/}"
   core_name="${core_name%_libretro.so}"
 
-  # Playtime is recorded by the launcher on the way out of every session.
-  # Read all three in one pass rather than three jq invocations per game.
-  local last_played=0 play_seconds=0 play_count=0
-  if [[ -f $PLAYS_FILE ]]; then
-    local plays
-    plays=$(jq -r --arg k "$rom" \
-      '[(.[$k].lastPlayed // 0), (.[$k].seconds // 0), (.[$k].count // 0)] | map(floor) | @tsv' \
-      "$PLAYS_FILE" 2>/dev/null) \
-      && IFS=$'\t' read -r last_played play_seconds play_count <<<"$plays"
-    [[ $last_played =~ ^[0-9]+$ ]] || last_played=0
-    [[ $play_seconds =~ ^[0-9]+$ ]] || play_seconds=0
-    [[ $play_count =~ ^[0-9]+$ ]] || play_count=0
-  fi
-
   local ext
   ext=$(effective_ext "$rom") || ext=""
 
@@ -461,7 +465,6 @@ add_game() {
   [[ -n $db ]] || db="${CORE_SYSTEM[$core_name]:-}"
 
   jq -c \
-    --argjson acc "$acc" \
     --arg key "$rom" \
     --arg ext "$ext" \
     --arg title "$label" \
@@ -473,15 +476,11 @@ add_game() {
     --arg resumeSlot "$slot" \
     --argjson resumeAt "${resume_at:-0}" \
     --arg resumeArt "$resume_art" \
-    --argjson lastPlayed "${last_played:-0}" \
-    --argjson playSeconds "${play_seconds:-0}" \
-    --argjson playCount "${play_count:-0}" \
-    -n '$acc + [{
+    -n '{
       key: $key, title: $title, system: $system, ext: $ext,
       core: $core, coreName: $coreName, rom: $rom, art: $art,
-      resumeSlot: $resumeSlot, resumeAt: $resumeAt, resumeArt: $resumeArt,
-      lastPlayed: $lastPlayed, playSeconds: $playSeconds, playCount: $playCount
-    }]'
+      resumeSlot: $resumeSlot, resumeAt: $resumeAt, resumeArt: $resumeArt
+    }' >>"$RECORDS_FILE"
 }
 
 # A cheap signature of everything a scan depends on: the ROM tree, the save
