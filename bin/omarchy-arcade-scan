@@ -283,28 +283,29 @@ emit_games() {
     done < <(find "$ROM_DIR" -type f -print0 2>/dev/null)
   fi
 
-  local plays_json="{}" games_json="[]"
+  local plays_json="{}"
   if [[ -f $PLAYS_FILE ]]; then
     plays_json=$(jq -c 'if type == "object" then . else {} end' "$PLAYS_FILE" 2>/dev/null) || plays_json="{}"
   fi
-  games_json=$(jq -cs --argjson plays "$plays_json" '
+
+  # Keep the full library on jq's stdin. Passing the accumulated JSON through
+  # --argjson made large libraries hit the OS argument-size limit and produced
+  # an empty scanner result to QML.
+  jq -s --argjson plays "$plays_json" \
+    --argjson cores "$CORES_JSON" \
+    --arg romDir "$ROM_DIR" \
+    --arg playlistDir "$PLAYLIST_DIR" \
+    --argjson fromPlaylists "$playlist_count" \
+    --argjson fromWalk "$walk_count" \
+    --argjson retroarch "$RETROARCH_PRESENT" '
     map(. as $game
       | ($plays[$game.rom] // {}) as $play
       | $game + {
           lastPlayed: (($play.lastPlayed // 0) | floor),
           playSeconds: (($play.seconds // 0) | floor),
           playCount: (($play.count // 0) | floor)
-        })' "$RECORDS_FILE") || games_json="[]"
-
-  jq -n \
-    --argjson games "$games_json" \
-    --argjson cores "$CORES_JSON" \
-    --arg romDir "$ROM_DIR" \
-    --arg playlistDir "$PLAYLIST_DIR" \
-    --argjson fromPlaylists "$playlist_count" \
-    --argjson fromWalk "$walk_count" \
-    --argjson retroarch "$RETROARCH_PRESENT" \
-    '($games | sort_by(.title | ascii_downcase)) as $sorted
+        })
+      | sort_by(.title | ascii_downcase) as $sorted
      | ($sorted | map(.ext) | unique | map(select(. != ""))) as $exts
      | {
          games: $sorted,
@@ -327,7 +328,7 @@ emit_games() {
            retroarchInstalled: $retroarch,
            coreCount: ((($cores.meta // {}).coreCount) // 0)
          }
-       }'
+        }' "$RECORDS_FILE"
 }
 
 # Folder name to the extension it stands for. ROM collections are commonly
