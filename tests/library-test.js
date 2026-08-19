@@ -170,6 +170,29 @@ test("a system with no prefix is left alone", () => {
   assert.strictEqual(Library.shortSystem(""), "")
 })
 
+// --- systemAndCore ----------------------------------------------------------
+
+test("the row meta names both the system and the core that will run", () => {
+  assert.strictEqual(
+    Library.systemAndCore(game({
+      system: "Nintendo - Super Nintendo Entertainment System",
+      coreName: "snes9x"
+    })),
+    "SNES · snes9x")
+})
+
+test("with no playlist there is no system, so the core stands alone", () => {
+  assert.strictEqual(Library.systemAndCore(game({ system: "", coreName: "snes9x" })), "snes9x")
+})
+
+test("a system and core that say the same thing are not repeated", () => {
+  assert.strictEqual(Library.systemAndCore(game({ system: "Dreamcast", coreName: "dreamcast" })), "Dreamcast")
+})
+
+test("systemAndCore tolerates a missing game", () => {
+  assert.strictEqual(Library.systemAndCore(null), "")
+})
+
 // --- formatAgo --------------------------------------------------------------
 
 test("formatAgo renders each bucket", () => {

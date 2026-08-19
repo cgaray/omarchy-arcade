@@ -178,6 +178,20 @@ function shortSystem(system) {
   return raw
 }
 
+// What runs this ROM, for display. The system alone is not the answer -- two
+// SNES games in the same library can end up on different cores, and the core
+// is what actually gets launched -- so show both when they differ in
+// substance, and never repeat one as the other.
+function systemAndCore(game) {
+  if (!game) return ""
+  var system = shortSystem(game.system)
+  var core = String(game.coreName || "")
+  if (!system) return core
+  if (!core) return system
+  if (system.toLowerCase() === core.toLowerCase()) return system
+  return system + " · " + core
+}
+
 function formatAgo(epochSeconds, nowSeconds) {
   var then = Number(epochSeconds || 0)
   if (then <= 0) return ""
@@ -195,6 +209,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     parseLibrary: parseLibrary,
     shortSystem: shortSystem,
+    systemAndCore: systemAndCore,
     subsequenceScore: subsequenceScore,
     filterGames: filterGames,
     resumableGames: resumableGames,

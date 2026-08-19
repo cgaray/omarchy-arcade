@@ -82,6 +82,11 @@ fi
 core_path_for() {
   local name="$1"
   [[ -n $name ]] || return 1
+  # "DETECT" is what RetroArch writes when a playlist entry is not pinned to a
+  # core, which is the default outcome of scanning a directory. It is a
+  # sentinel, not a core name, and the caller has to fall through to the next
+  # source rather than treat it as an answer.
+  [[ $name == DETECT ]] && return 1
   # Accept a bare core name, a filename, or an absolute path, so the same
   # helper serves cores.conf and a playlist's core_path alike.
   if [[ $name == /* ]]; then
@@ -167,6 +172,10 @@ emit_games() {
       jq -e 'type == "object" and (.items | type == "array")' "$lpl" >/dev/null 2>&1 || continue
       local db
       db="${lpl##*/}"
+      # A playlist can pin one core for all of its entries. When it does, that
+      # is a deliberate choice by the user and outranks our extension guess.
+      local playlist_core
+      playlist_core=$(jq -r '.default_core_path // ""' "$lpl" 2>/dev/null)
       local entries
       entries=$(jq -c --arg db "$db" '
         [ .items[]
@@ -185,8 +194,17 @@ emit_games() {
         # as a tile that does nothing when you press Enter.
         [[ -f $rom ]] || continue
 
+        # Which emulator runs this ROM, most specific answer first:
+        #   1. the core this entry is pinned to
+        #   2. the core the whole playlist is pinned to
+        #   3. our extension map (which cores.conf can override)
+        # A ROM none of them can answer for is skipped rather than launched
+        # under a guess.
         local core
-        core=$(core_path_for "$core_hint") || core=$(core_path_for "$(ext_core_for "$rom")") || continue
+        core=$(core_path_for "$core_hint") \
+          || core=$(core_path_for "$playlist_core") \
+          || core=$(core_path_for "$(ext_core_for "$rom")") \
+          || continue
 
         games_json=$(add_game "$games_json" "$rom" "$label" "${db%.lpl}" "$core") || true
         playlist_count=$((playlist_count + 1))

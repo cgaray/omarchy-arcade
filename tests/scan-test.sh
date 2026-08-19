@@ -187,6 +187,97 @@ check "box art is resolved from the playlist name" \
 check "the system name comes from the playlist" \
   "Nintendo - Super Nintendo Entertainment System" "$(jq -r '.games[0].system' <<<"$out")"
 
+# --- Which core runs the ROM -------------------------------------------------
+
+# The common case: RetroArch scanned a directory and pinned nothing, so every
+# entry says DETECT. That is a sentinel, not a core, and the extension map has
+# to answer instead.
+cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
+{
+  "version": "1.5",
+  "default_core_path": "",
+  "items": [
+    {
+      "path": "$FIXTURE/roms/Super Mario World (USA).sfc",
+      "label": "Super Mario World",
+      "core_path": "DETECT",
+      "core_name": "DETECT"
+    }
+  ]
+}
+LPL
+out=$(run_scan)
+check "DETECT falls through to the extension map" \
+  "snes9x" "$(jq -r '.games[0].coreName' <<<"$out")"
+
+# A playlist pinned to one core outranks the extension map...
+cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
+{
+  "version": "1.5",
+  "default_core_path": "$FIXTURE/cores/gambatte_libretro.so",
+  "items": [
+    {
+      "path": "$FIXTURE/roms/Super Mario World (USA).sfc",
+      "label": "Super Mario World",
+      "core_path": "DETECT"
+    }
+  ]
+}
+LPL
+out=$(run_scan)
+check "a playlist default core outranks the extension map" \
+  "gambatte" "$(jq -r '.games[0].coreName' <<<"$out")"
+
+# ...and a pinned entry outranks the playlist default.
+cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
+{
+  "version": "1.5",
+  "default_core_path": "$FIXTURE/cores/gambatte_libretro.so",
+  "items": [
+    {
+      "path": "$FIXTURE/roms/Super Mario World (USA).sfc",
+      "label": "Super Mario World",
+      "core_path": "$FIXTURE/cores/snes9x_libretro.so"
+    }
+  ]
+}
+LPL
+out=$(run_scan)
+check "an entry's own core outranks the playlist default" \
+  "snes9x" "$(jq -r '.games[0].coreName' <<<"$out")"
+
+# A core named by a playlist that is not installed must not be launched.
+cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
+{
+  "version": "1.5",
+  "items": [
+    {
+      "path": "$FIXTURE/roms/Super Mario World (USA).sfc",
+      "label": "Super Mario World",
+      "core_path": "$FIXTURE/cores/uninstalled_libretro.so"
+    }
+  ]
+}
+LPL
+out=$(run_scan)
+check "a core that is not installed falls through instead of launching" \
+  "snes9x" "$(jq -r '.games[0].coreName' <<<"$out")"
+
+# Restore the playlist the later checks expect.
+cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
+{
+  "version": "1.5",
+  "items": [
+    {
+      "path": "$FIXTURE/roms/Super Mario World (USA).sfc",
+      "label": "Super Mario World",
+      "core_path": "$FIXTURE/cores/snes9x_libretro.so",
+      "db_name": "Nintendo - Super Nintendo Entertainment System.lpl"
+    }
+  ]
+}
+LPL
+
 # --- Malformed playlist ------------------------------------------------------
 
 echo 'not json at all' >"$FIXTURE/ra/playlists/Broken.lpl"

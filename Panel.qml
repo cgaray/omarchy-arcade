@@ -407,7 +407,7 @@ Panel {
                         var bits = []
                         var ago = Library.formatAgo(g.resumeAt, root.nowSeconds)
                         if (ago) bits.push("saved " + ago)
-                        var sys = Library.shortSystem(g.system) || g.coreName
+                        var sys = Library.systemAndCore(g)
                         if (sys) bits.push(sys)
                         return bits.join(" · ")
                       }
@@ -541,8 +541,7 @@ Panel {
                     Text {
                       width: parent.width
                       visible: text.length > 0
-                      text: Library.shortSystem(libraryRow.modelData.system)
-                            || libraryRow.modelData.coreName
+                      text: Library.systemAndCore(libraryRow.modelData)
                       textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.fontFamily

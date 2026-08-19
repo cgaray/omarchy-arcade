@@ -51,20 +51,44 @@ bindd = SUPER, G, Arcade, exec, omarchy-shell io.garay.arcade toggle
 Arcade reads two sources, in this order:
 
 1. **RetroArch playlists** (`~/.config/retroarch/playlists/*.lpl`). If you have
-   run RetroArch's scanner these win — they carry the real system name, the
-   core RetroArch itself picked, and they unlock box art.
+   run RetroArch's scanner these win — they carry the real system name and
+   unlock box art.
 2. **A walk of your ROM folder**, `~/Games/roms` on a stock Omarchy install.
-   The fallback for a fresh setup, where the extension picks the core.
+   The fallback for a fresh setup.
 
 Drop ROMs in `~/Games/roms` and press `r`. That is the whole setup.
 
 Box art comes from RetroArch's own thumbnail cache — Arcade downloads nothing.
 
+## Which emulator runs a game
+
+Every row shows it, next to the system: `SNES · snes9x`. That is the core
+Arcade will pass to `retroarch -L`, decided before you press anything.
+
+Note that a playlist usually does *not* answer this. Scanning a directory in
+RetroArch writes `"core_path": "DETECT"` on every entry, meaning "decide at
+launch" — so for most libraries the extension map below is what actually picks
+the emulator. Arcade resolves it in this order, most specific first:
+
+1. **The core the playlist entry is pinned to**, if that core is installed.
+   You get this by setting a core on an entry in RetroArch itself.
+2. **The core the whole playlist is pinned to** (`default_core_path`).
+3. **The extension map**, which `cores.conf` can override.
+
+A ROM that none of the three can answer for is left out of the library rather
+than launched under a guess. A core named by a playlist but not installed
+falls through to the next step instead of failing at launch.
+
 ### Extensions Arcade will not guess at
 
 `.bin`, `.iso`, and `.zip` belong to several systems each, and RetroArch given
 the wrong core does not fail cleanly: it opens a black window and sits there.
-So the ROM walk skips ambiguous extensions instead of guessing.
+So an ambiguous extension is skipped instead of guessed at.
+
+The built-in map covers the unambiguous ones: `sfc/smc/swc/fig` → snes9x,
+`nes/fds/unf/unif` → mesen, `gb/gbc` → gambatte, `gba` → mgba,
+`md/smd/gen/sms/gg` → genesis_plus_gx, `n64/z64/v64` → mupen64plus_next,
+`nds` → melonds, `pce` → mednafen_pce_fast, `cue/chd/pbp` → mednafen_psx_hw.
 
 If your library is unambiguous, claim them in
 `~/.config/omarchy/arcade/cores.conf`:
@@ -75,7 +99,8 @@ zip = snes9x
 bin = mednafen_psx_hw
 ```
 
-Playlists are unaffected — they already name their own core.
+An entry or playlist pinned to a core still wins over `cores.conf`; the file
+only settles cases nothing else answered.
 
 ## Keys
 
@@ -125,11 +150,12 @@ Both scripts run standalone:
 ./tests/run.sh
 ```
 
-Manifest validation, `bash -n`, `qmllint`, 20 unit tests over `Library.js`, and
-25 integration tests that run the scanner against a fixture library — including
-save states in per-core subdirectories, dead playlist entries, malformed
-playlists, and filenames with spaces and apostrophes. No display, no running
-shell, no emulator.
+Manifest validation, `bash -n`, `qmllint` on `Library.js`, a bar-widget contract
+check, 24 unit tests over `Library.js`, and 29 integration tests that run the
+scanner against a fixture library — including the full core-precedence chain,
+`DETECT` entries, uninstalled cores, save states in per-core subdirectories,
+dead playlist entries, malformed playlists, and filenames with spaces and
+apostrophes. No display, no running shell, no emulator.
 
 ## Status
 
