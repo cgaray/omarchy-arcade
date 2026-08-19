@@ -93,20 +93,30 @@ function subsequenceScore(haystack, needle) {
 // Rank matches, then fall back to the caller's incoming order (which the
 // scanner already sorted by title) so an empty query is stable rather than
 // reshuffling every rescan.
+// The key a game is grouped and filtered under. Two sources name the same
+// system differently -- a playlist says "Nintendo - Super Nintendo
+// Entertainment System" while a core's .info says "Super Nintendo
+// Entertainment System" -- so grouping on the raw string produced one tab per
+// spelling, both reading "SNES". Group on the shortened name instead, which
+// is what the user sees anyway.
+function systemKey(game) {
+  if (!game) return "Unknown"
+  return shortSystem(game.system) || "Unknown"
+}
+
 // The systems present in a library, each with its count, for the filter row.
 // Sorted by name so the row does not reorder itself as games come and go.
 function systemsOf(games) {
   var list = games || []
   var counts = {}
   for (var i = 0; i < list.length; i++) {
-    var raw = String(list[i].system || "")
-    if (!raw) raw = "Unknown"
-    counts[raw] = (counts[raw] || 0) + 1
+    var key = systemKey(list[i])
+    counts[key] = (counts[key] || 0) + 1
   }
 
   var out = []
-  for (var key in counts) {
-    out.push({ system: key, label: shortSystem(key) || key, count: counts[key] })
+  for (var name in counts) {
+    out.push({ system: name, label: name, count: counts[name] })
   }
   out.sort(function (a, b) { return a.label.localeCompare(b.label) })
   return out
@@ -124,7 +134,7 @@ function filterGames(games, query, limit, system) {
   if (wanted) {
     list = []
     for (var s = 0; s < all.length; s++) {
-      if ((String(all[s].system || "") || "Unknown") === wanted) list.push(all[s])
+      if (systemKey(all[s]) === wanted) list.push(all[s])
     }
   }
 
@@ -311,6 +321,7 @@ if (typeof module !== "undefined" && module.exports) {
     prettyTitle: prettyTitle,
     shortSystem: shortSystem,
     systemAndCore: systemAndCore,
+    systemKey: systemKey,
     systemsOf: systemsOf,
     undecidedExtensions: undecidedExtensions,
     choosableExtensions: choosableExtensions,

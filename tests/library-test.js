@@ -134,15 +134,41 @@ test("systemsOf counts each system and shortens its name", () => {
   assert.deepStrictEqual(out.map((s) => [s.label, s.count]), [["NES", 1], ["SNES", 2]])
 })
 
+// A playlist and a core .info name the same system differently. Grouping on
+// the raw string gave one tab per spelling, both reading "SNES".
+test("the two spellings of a system are one tab, not two", () => {
+  const games = [
+    game({ system: "Nintendo - Super Nintendo Entertainment System" }),
+    game({ system: "Super Nintendo Entertainment System" }),
+    game({ system: "Nintendo - Nintendo Entertainment System" }),
+    game({ system: "Nintendo Entertainment System" })
+  ]
+  const out = Library.systemsOf(games)
+  assert.deepStrictEqual(out.map((s) => [s.label, s.count]), [["NES", 2], ["SNES", 2]])
+})
+
+test("filtering a merged system catches both spellings", () => {
+  const games = [
+    game({ title: "A", system: "Nintendo - Super Nintendo Entertainment System" }),
+    game({ title: "B", system: "Super Nintendo Entertainment System" }),
+    game({ title: "C", system: "Nintendo Entertainment System" })
+  ]
+  const out = Library.filterGames(games, "", 100, "SNES")
+  assert.deepStrictEqual(out.map((g) => g.title), ["A", "B"])
+})
+
 test("a game with no system is grouped as Unknown rather than dropped", () => {
   const out = Library.systemsOf([game({ system: "" })])
   assert.deepStrictEqual(out.map((s) => [s.system, s.count]), [["Unknown", 1]])
+  assert.deepStrictEqual(
+    Library.filterGames([game({ title: "X", system: "" })], "", 100, "Unknown").map((g) => g.title),
+    ["X"])
 })
 
 test("the system filter restricts the library", () => {
   const games = [
-    game({ title: "Zelda", system: "SNES" }),
-    game({ title: "Metroid", system: "NES" })
+    game({ title: "Zelda", system: "Nintendo - Super Nintendo Entertainment System" }),
+    game({ title: "Metroid", system: "Nintendo - Nintendo Entertainment System" })
   ]
   const out = Library.filterGames(games, "", 100, "SNES")
   assert.deepStrictEqual(out.map((g) => g.title), ["Zelda"])
@@ -150,8 +176,8 @@ test("the system filter restricts the library", () => {
 
 test("searching inside a system stays inside it", () => {
   const games = [
-    game({ title: "Mario Kart", system: "SNES" }),
-    game({ title: "Mario Bros", system: "NES" })
+    game({ title: "Mario Kart", system: "Nintendo - Super Nintendo Entertainment System" }),
+    game({ title: "Mario Bros", system: "Nintendo - Nintendo Entertainment System" })
   ]
   const out = Library.filterGames(games, "mario", 100, "NES")
   assert.deepStrictEqual(out.map((g) => g.title), ["Mario Bros"])

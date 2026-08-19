@@ -576,7 +576,7 @@ Panel {
             text: {
               if (root.query)
                 return root.libraryRows.length + " match" + (root.libraryRows.length === 1 ? "" : "es")
-              if (root.systemFilter) return Library.shortSystem(root.systemFilter) || root.systemFilter
+              if (root.systemFilter) return root.systemFilter
               return "Library"
             }
             foreground: root.foreground
