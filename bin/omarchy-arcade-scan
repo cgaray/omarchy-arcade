@@ -484,13 +484,41 @@ add_game() {
     }]'
 }
 
+# A cheap signature of everything a scan depends on: the ROM tree, the save
+# states, the playlists, and the core choices. Milliseconds against a hundred
+# games, so the panel can poll it and only pay for a full rescan when
+# something has actually changed.
+#
+# Polled rather than watched with inotify deliberately: inotify-tools is not
+# guaranteed to be installed, a recursive watch on a large tree can exhaust
+# the user's watch limit, and a long-lived monitor process is one more thing
+# to keep alive across a shell restart. A 46ms find is none of those things.
+fingerprint() {
+  {
+    find "$ROM_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
+    find "$SAVESTATE_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
+    find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -printf '%T@\t%s\t%p\n' 2>/dev/null
+    [[ -f $CORES_CONF ]] && stat -c 'cores.conf\t%Y' "$CORES_CONF" 2>/dev/null
+  } | sort | cksum | tr -d ' \n'
+  printf '\n'
+}
+
 case "${1:-}" in
+  --fingerprint)
+    fingerprint
+    exit 0
+    ;;
   -h|--help)
     cat <<USAGE
-Usage: omarchy-arcade-scan
+Usage: omarchy-arcade-scan [--fingerprint]
 
 Prints the Arcade game library as JSON on stdout:
-  { "games": [ ... ], "meta": { ... } }
+  { "games": [ ... ], "extensions": [ ... ], "meta": { ... } }
+
+  --fingerprint  Print a short signature of the ROM tree, save states,
+                 playlists, and core choices instead. Changes whenever a full
+                 rescan would produce different output, and costs
+                 milliseconds, so it is cheap to poll.
 
 Environment:
   ARCADE_ROM_DIR   Override the ROM directory (default: RetroArch's

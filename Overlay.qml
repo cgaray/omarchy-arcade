@@ -24,6 +24,14 @@ Item {
   readonly property string pluginId: (root.manifest && root.manifest.id) || "io.garay.arcade"
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/" + pluginId
 
+  // Commands are spawned by absolute path. execDetached does not go through a
+  // shell and does not inherit a login PATH, so a bare "omarchy-shell" here
+  // silently spawned nothing -- which is exactly how the "b" shortcut and the
+  // install button came to do nothing at all. Every first-party plugin that
+  // spawns an Omarchy command resolves it through OMARCHY_PATH; so do we.
+  readonly property string omarchyBin: Quickshell.env("OMARCHY_PATH") + "/bin"
+
+
   property bool opened: false
   property string filterText: ""
   property string systemFilter: ""
@@ -99,6 +107,7 @@ Item {
 
   function applyScan(raw) {
     root.scanning = false
+    root.lastFingerprint = ""
     var parsed = Library.parseLibrary(raw)
     root.loadError = parsed.error
     root.games = parsed.games
@@ -193,6 +202,41 @@ Item {
   function activate(resume) {
     if (root.selectedIndex < 0 || root.selectedIndex >= root.visibleGames.length) return
     root.launch(root.visibleGames[root.selectedIndex], resume)
+  }
+
+
+  // --- Watching for new ROMs --------------------------------------------------
+  // A full scan costs a second or two on a large library, which is far too
+  // much to run on a short timer. The scanner's --fingerprint mode costs
+  // milliseconds, so poll that and only pay for a rescan when it moves.
+  // Catches ROMs added or removed, new save states, playlist imports, and
+  // core choices made elsewhere.
+  property string lastFingerprint: ""
+
+  Process {
+    id: watchProcess
+    command: [root.pluginDir + "/bin/omarchy-arcade-scan", "--fingerprint"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var next = String(text || "").trim()
+        if (!next.length) return
+        // The first reading establishes a baseline rather than counting as a
+        // change, so opening the panel does not immediately rescan twice.
+        if (root.lastFingerprint === "") { root.lastFingerprint = next; return }
+        if (next === root.lastFingerprint) return
+        root.lastFingerprint = next
+        root.refresh()
+      }
+    }
+  }
+
+  Timer {
+    // Only while the grid is on screen: a closed overlay has no one to tell.
+    interval: Math.max(2, 10) * 1000
+    running: root.opened
+    repeat: true
+    onTriggered: if (!watchProcess.running && !root.scanning) watchProcess.running = true
   }
 
   ListModel { id: tileModel }
@@ -576,7 +620,7 @@ Item {
               onClicked: {
                 root.dismiss()
                 Quickshell.execDetached([
-                  "omarchy-launch-floating-terminal-with-presentation",
+                  root.omarchyBin + "/omarchy-launch-floating-terminal-with-presentation",
                   "omarchy-install-gaming-retroarch"
                 ])
               }

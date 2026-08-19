@@ -124,6 +124,28 @@ test("limit is honoured", () => {
   assert.strictEqual(Library.filterGames(games, "", 2).length, 2)
 })
 
+// --- Continue and the system filter -----------------------------------------
+
+test("Continue follows the system filter instead of vanishing", () => {
+  const games = [
+    game({ title: "SnesSave", system: "Nintendo - Super Nintendo Entertainment System",
+           resumeSlot: "0", resumeAt: 500 }),
+    game({ title: "NesSave", system: "Nintendo - Nintendo Entertainment System",
+           resumeSlot: "0", resumeAt: 400 })
+  ]
+  assert.deepStrictEqual(Library.resumableIn(games, "SNES", 6).map((g) => g.title), ["SnesSave"])
+  assert.deepStrictEqual(Library.resumableIn(games, "", 6).map((g) => g.title),
+    ["SnesSave", "NesSave"])
+})
+
+test("a system with no saves has an empty Continue shelf, not the wrong one", () => {
+  const games = [
+    game({ title: "SnesSave", system: "Nintendo - Super Nintendo Entertainment System",
+           resumeSlot: "0", resumeAt: 500 })
+  ]
+  assert.deepStrictEqual(Library.resumableIn(games, "NES", 6), [])
+})
+
 // --- systemsOf and system filtering -----------------------------------------
 
 test("systemsOf counts each system and shortens its name", () => {

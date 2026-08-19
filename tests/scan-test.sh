@@ -357,6 +357,42 @@ out=$(run_scan)
 check "a malformed playlist does not take the scan down with it" \
   "true" "$(jq '[.games[].title] | contains(["Super Mario World"])' <<<"$out")"
 
+# --- Fingerprint -------------------------------------------------------------
+
+# The panel polls this instead of rescanning, so it has to change whenever a
+# scan would produce different output, and not otherwise.
+fp() {
+  RA_CONFIG_DIR="$FIXTURE/ra" \
+  XDG_STATE_HOME="$FIXTURE/state" \
+  XDG_CONFIG_HOME="$FIXTURE/config" \
+  "$SCAN" --fingerprint
+}
+
+before=$(fp)
+check "the fingerprint is stable when nothing changed" "$before" "$(fp)"
+
+check "the fingerprint is not empty" "true" "$([[ -n $before ]] && echo true || echo false)"
+
+touch "$FIXTURE/roms/Newly Added.sfc"
+check "a new ROM changes the fingerprint" \
+  "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
+
+before=$(fp)
+rm -f "$FIXTURE/roms/Newly Added.sfc"
+check "a removed ROM changes the fingerprint" \
+  "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
+
+before=$(fp)
+mkdir -p "$FIXTURE/ra/states/Snes9x"
+touch "$FIXTURE/ra/states/Snes9x/Super Mario World (USA).state"
+check "a new save state changes the fingerprint, so Continue updates" \
+  "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
+
+before=$(fp)
+printf 'gb = gambatte\n' >>"$FIXTURE/config/omarchy/arcade/cores.conf"
+check "a core choice changes the fingerprint" \
+  "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
+
 if (( failures )); then
   echo "scan-test: $passed passed, $failures failed"
   exit 1

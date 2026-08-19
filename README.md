@@ -84,7 +84,16 @@ scanned and part not — letting a playlist suppress the walk would hide every
 ROM you had not got round to importing. A ROM in both keeps the playlist's
 better metadata and appears once.
 
-Drop ROMs in `~/Games/roms` and press `r`. That is the whole setup.
+Drop ROMs in `~/Games/roms` and they appear on their own — Arcade watches the
+folder, along with your save states, playlists, and core choices. `r` forces a
+rescan if you would rather not wait.
+
+The watch is a poll, not an inotify watch: the scanner has a `--fingerprint`
+mode that signs the ROM tree in a few milliseconds, so the panel checks that
+every ten seconds and only pays for a full rescan when it moves. That avoids
+depending on `inotify-tools`, avoids exhausting the kernel's watch limit on a
+large tree, and leaves no monitor process to keep alive across a shell
+restart.
 
 Box art comes from RetroArch's own thumbnail cache — Arcade downloads nothing.
 
@@ -165,7 +174,9 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 
 | Setting | Default | Does |
 |---|---|---|
-| `refreshIntervalSec` | 300 | Background rescan interval. Opening the panel always rescans. |
+| `refreshIntervalSec` | 300 | Full rescan interval, as a safety net behind the watch. |
+| `watchRoms` | true | Notice new ROMs, save states, and playlist imports without waiting. |
+| `watchIntervalSec` | 10 | How often the cheap change-check runs. |
 | `maxLibraryRows` | 40 | Caps rendered rows; search still covers everything. |
 | `silenceNotifications` | true | Do-not-disturb for the length of the game. |
 | `stayAwake` | true | Suppress idle and the lock screen while playing. |
@@ -179,7 +190,7 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 | `Overlay.qml` | The fullscreen cover-art grid. |
 | `bin/omarchy-arcade-cores` | Reads RetroArch's core `.info` files; records core choices. |
 | `Library.js` | Filtering, ranking, Continue selection, system names. Pure, tested. |
-| `bin/omarchy-arcade-scan` | Builds the library as JSON. |
+| `bin/omarchy-arcade-scan` | Builds the library as JSON; `--fingerprint` signs it cheaply. |
 | `bin/omarchy-arcade-launch` | Launches a game and holds the desktop still. |
 
 Both scripts run standalone:
@@ -198,7 +209,7 @@ Both scripts run standalone:
 
 Manifest validation, `bash -n`, `qmllint` on `Library.js` and `Overlay.qml`, a
 plugin contract
-check, 47 unit tests over `Library.js`, and 38 integration tests that run the
+check, 49 unit tests over `Library.js`, and 44 integration tests that run the
 scanner against a fixture library — including the full core-precedence chain,
 `DETECT` entries, uninstalled cores, extensionless ROMs, save states in
 per-core subdirectories, dead playlist entries, malformed playlists, and

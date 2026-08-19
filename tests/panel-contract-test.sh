@@ -108,6 +108,18 @@ for script in omarchy-arcade-scan omarchy-arcade-launch; do
     "true" "$([[ -x $ROOT/bin/$script ]] && echo true || echo false)"
 done
 
+# execDetached does not go through a shell and does not inherit a login PATH,
+# so a bare command name spawns nothing at all -- no error, no log line. Every
+# spawn must therefore be an absolute path built from OMARCHY_PATH or the
+# plugin directory. This is the bug that made "b" and the install button no-ops.
+# Only the first element is the binary; later elements are arguments, and one
+# of them is legitimately a bare command name handed to a terminal launcher
+# that does go through a shell.
+for qml in "$PANEL" "$ROOT/$OVERLAY"; do
+  bare=$(grep -A1 'execDetached(\[$' "$qml" | grep -cE '^\s*"[a-z][a-z0-9-]*"' || true)
+  check "$(basename "$qml") spawns nothing by bare command name" "0" "$bare"
+done
+
 if (( failures )); then
   echo "panel-contract-test: $passed passed, $failures failed"
   exit 1

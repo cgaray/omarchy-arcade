@@ -24,6 +24,14 @@ Panel {
 
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/io.garay.arcade"
 
+  // Commands are spawned by absolute path. execDetached does not go through a
+  // shell and does not inherit a login PATH, so a bare "omarchy-shell" here
+  // silently spawned nothing -- which is exactly how the "b" shortcut and the
+  // install button came to do nothing at all. Every first-party plugin that
+  // spawns an Omarchy command resolves it through OMARCHY_PATH; so do we.
+  readonly property string omarchyBin: Quickshell.env("OMARCHY_PATH") + "/bin"
+
+
   // The bar sizes each slot from its widget's implicit size, so a root that
   // reports nothing collapses to zero width and renders as a gap.
   implicitWidth: button.implicitWidth
@@ -117,6 +125,7 @@ Panel {
 
   function applyScan(raw) {
     root.scanning = false
+    root.lastFingerprint = ""
     var parsed = Library.parseLibrary(raw)
     root.loadError = parsed.error
     root.games = parsed.games
@@ -126,8 +135,10 @@ Panel {
   }
 
   function rebuild() {
-    root.continueRows = (root.query || root.systemFilter)
-      ? [] : Library.resumableGames(root.games, 6)
+    // A text search means the user is hunting one title, so the shelf steps
+    // out of the way. A system filter is a place to be, so the shelf follows
+    // them into it rather than vanishing.
+    root.continueRows = root.query ? [] : Library.resumableIn(root.games, root.systemFilter, 6)
     // A filter that survives a rescan but names a system no longer present
     // would silently show an empty library, so drop it.
     if (root.systemFilter) {
@@ -267,7 +278,7 @@ Panel {
   function browseAll() {
     root.close()
     Quickshell.execDetached([
-      "omarchy-shell", "-q", "shell", "summon", root.pluginId,
+      root.omarchyBin + "/omarchy-shell", "-q", "shell", "summon", root.pluginId,
       JSON.stringify({ system: root.systemFilter })
     ])
   }
@@ -275,7 +286,7 @@ Panel {
   function installRetroArch() {
     root.close()
     Quickshell.execDetached([
-      "omarchy-launch-floating-terminal-with-presentation",
+      root.omarchyBin + "/omarchy-launch-floating-terminal-with-presentation",
       "omarchy-install-gaming-retroarch"
     ])
   }
@@ -288,6 +299,42 @@ Panel {
       waitForEnd: true
       onStreamFinished: root.applyScan(text)
     }
+  }
+
+
+  // --- Watching for new ROMs --------------------------------------------------
+  // A full scan costs a second or two on a large library, which is far too
+  // much to run on a short timer. The scanner's --fingerprint mode costs
+  // milliseconds, so poll that and only pay for a rescan when it moves.
+  // Catches ROMs added or removed, new save states, playlist imports, and
+  // core choices made elsewhere.
+  property string lastFingerprint: ""
+
+  Process {
+    id: watchProcess
+    command: [root.pluginDir + "/bin/omarchy-arcade-scan", "--fingerprint"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var next = String(text || "").trim()
+        if (!next.length) return
+        // The first reading establishes a baseline rather than counting as a
+        // change, so opening the panel does not immediately rescan twice.
+        if (root.lastFingerprint === "") { root.lastFingerprint = next; return }
+        if (next === root.lastFingerprint) return
+        root.lastFingerprint = next
+        root.refresh()
+      }
+    }
+  }
+
+  Timer {
+    // Runs whether or not the panel is open, so the bar count and the "to
+    // continue" tally are already right when it is opened.
+    interval: Math.max(2, root.setting("watchIntervalSec", 10)) * 1000
+    running: root.setting("watchRoms", true)
+    repeat: true
+    onTriggered: if (!watchProcess.running && !root.scanning) watchProcess.running = true
   }
 
   // The bar icon lights while a game is running, which is the one piece of

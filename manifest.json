@@ -32,7 +32,9 @@
       "maxLibraryRows": 40,
       "silenceNotifications": true,
       "stayAwake": true,
-      "romDir": ""
+      "romDir": "",
+      "watchRoms": true,
+      "watchIntervalSec": 10
     },
     "schema": [
       {
@@ -75,6 +77,23 @@
         "label": "ROM folder",
         "defaultValue": "",
         "description": "Leave empty to use RetroArch's own browser directory (~/Games/roms on a stock Omarchy install)."
+      },
+      {
+        "key": "watchRoms",
+        "type": "boolean",
+        "label": "Watch the ROM folder for changes",
+        "defaultValue": true,
+        "description": "Notices ROMs added or removed, new save states, and playlist imports without waiting for the rescan interval. Costs a few milliseconds per check."
+      },
+      {
+        "key": "watchIntervalSec",
+        "type": "integer",
+        "label": "Watch interval (seconds)",
+        "min": 2,
+        "max": 120,
+        "step": 1,
+        "defaultValue": 10,
+        "description": "How often the ROM folder is checked for changes. This is the cheap check, not a full rescan."
       }
     ]
   }

@@ -329,6 +329,14 @@ function playSummary(game, nowSeconds) {
   return bits.join(" · ")
 }
 
+// The Continue shelf for a given system, or for the whole library when no
+// system is selected. Separate from resumableGames so the composition the
+// panel needs is a tested function rather than a QML binding.
+function resumableIn(games, system, limit) {
+  var pool = system ? filterGames(games, "", 100000, system) : (games || [])
+  return resumableGames(pool, limit)
+}
+
 function formatAgo(epochSeconds, nowSeconds) {
   var then = Number(epochSeconds || 0)
   if (then <= 0) return ""
@@ -355,6 +363,7 @@ if (typeof module !== "undefined" && module.exports) {
     subsequenceScore: subsequenceScore,
     filterGames: filterGames,
     resumableGames: resumableGames,
+    resumableIn: resumableIn,
     formatAgo: formatAgo,
     formatDuration: formatDuration,
     playSummary: playSummary
