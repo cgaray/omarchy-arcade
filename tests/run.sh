@@ -46,6 +46,7 @@ step "bar-widget contract" bash "$HERE/panel-contract-test.sh"
 step "qml root references" node "$HERE/qml-refs-test.js" "$ROOT/Panel.qml" "$ROOT/Overlay.qml"
 step "library unit tests" node "$HERE/library-test.js"
 step "session unit tests" node "$HERE/session-test.js"
+step "launcher integration tests" bash "$HERE/launch-test.sh"
 step "scanner integration tests" bash "$HERE/scan-test.sh"
 
 if (( status )); then

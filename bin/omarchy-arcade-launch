@@ -14,6 +14,9 @@ set -uo pipefail
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-arcade"
 PLAYS_FILE="$STATE_DIR/plays.json"
+RETROARCH_CMD="${RETROARCH_CMD:-retroarch}"
+OMARCHY_SHELL_CMD="${OMARCHY_SHELL_CMD:-omarchy-shell}"
+OMARCHY_IDLE_CMD="${OMARCHY_IDLE_CMD:-omarchy-toggle-idle}"
 
 CORE=""
 ROM=""
@@ -57,7 +60,7 @@ done
 [[ -n $ROM ]]  || { usage >&2; die "--rom is required"; }
 [[ -f $CORE ]] || die "core not found: $CORE"
 [[ -f $ROM ]]  || die "ROM not found: $ROM"
-command -v retroarch >/dev/null || die "retroarch is not installed"
+command -v "$RETROARCH_CMD" >/dev/null || die "retroarch is not installed"
 
 # --- Save and restore the desktop ------------------------------------------
 
@@ -67,22 +70,34 @@ command -v retroarch >/dev/null || die "retroarch is not installed"
 # restore either.
 PREV_DND=""
 PREV_IDLE=""
-(( SILENCE_NOTIFICATIONS )) && PREV_DND=$(omarchy-shell -q notifications dndState 2>/dev/null | tr -d '[:space:]')
-(( SUPPRESS_IDLE )) && PREV_IDLE=$(omarchy-toggle-idle status 2>/dev/null | jq -r '.enabled // false' 2>/dev/null)
+
+capture_desktop() {
+  (( SILENCE_NOTIFICATIONS )) && PREV_DND=$("$OMARCHY_SHELL_CMD" -q notifications dndState 2>/dev/null | tr -d '[:space:]')
+  (( SUPPRESS_IDLE )) && PREV_IDLE=$("$OMARCHY_IDLE_CMD" status 2>/dev/null | jq -r '.enabled // false' 2>/dev/null)
+}
+
+refresh_indicators() {
+  "$OMARCHY_SHELL_CMD" -q omarchy.indicators refresh >/dev/null 2>&1
+}
+
+apply_desktop_policy() {
+  (( SILENCE_NOTIFICATIONS )) && "$OMARCHY_SHELL_CMD" -q notifications setDnd true >/dev/null 2>&1
+  (( SUPPRESS_IDLE )) && "$OMARCHY_IDLE_CMD" stay-awake >/dev/null 2>&1
+  refresh_indicators
+}
 
 restore_desktop() {
   # Only undo what we actually changed. A user who was already in
   # do-not-disturb before launching stays in it afterwards.
-  [[ $PREV_DND == "false" ]] && omarchy-shell -q notifications setDnd false >/dev/null 2>&1
-  [[ $PREV_IDLE == "false" ]] && omarchy-toggle-idle allow-idle >/dev/null 2>&1
-  omarchy-shell -q omarchy.indicators refresh >/dev/null 2>&1
+  [[ $PREV_DND == "false" ]] && "$OMARCHY_SHELL_CMD" -q notifications setDnd false >/dev/null 2>&1
+  [[ $PREV_IDLE == "false" ]] && "$OMARCHY_IDLE_CMD" allow-idle >/dev/null 2>&1
+  refresh_indicators
   return 0
 }
 trap restore_desktop EXIT INT TERM
 
-(( SILENCE_NOTIFICATIONS )) && omarchy-shell -q notifications setDnd true >/dev/null 2>&1
-(( SUPPRESS_IDLE )) && omarchy-toggle-idle stay-awake >/dev/null 2>&1
-omarchy-shell -q omarchy.indicators refresh >/dev/null 2>&1
+capture_desktop
+apply_desktop_policy
 
 # --- Build the RetroArch invocation ----------------------------------------
 
@@ -114,31 +129,33 @@ trap 'cleanup_cfg; restore_desktop' EXIT INT TERM
 # --- Play -------------------------------------------------------------------
 
 started=$(date +%s)
-retroarch "${args[@]}"
+"$RETROARCH_CMD" "${args[@]}"
 status=$?
 ended=$(date +%s)
 
-# --- Record the session -----------------------------------------------------
+record_session() {
+  # Keyed by ROM path, matching the scanner's `key`. Written through a temp file
+  # so an interrupted write cannot leave a truncated plays.json behind, which
+  # would silently reset every playtime the user has accumulated.
+  mkdir -p "$STATE_DIR"
+  [[ -f $PLAYS_FILE ]] || echo '{}' >"$PLAYS_FILE"
 
-# Keyed by ROM path, matching the scanner's `key`. Written through a temp file
-# so an interrupted write cannot leave a truncated plays.json behind, which
-# would silently reset every playtime the user has accumulated.
-mkdir -p "$STATE_DIR"
-[[ -f $PLAYS_FILE ]] || echo '{}' >"$PLAYS_FILE"
+  tmp=$(mktemp -t arcade-plays-XXXXXX.json) || return 0
+  if jq \
+    --arg key "$ROM" \
+    --argjson lastPlayed "$ended" \
+    --argjson seconds "$(( ended - started ))" \
+    '.[$key] = {
+       lastPlayed: $lastPlayed,
+       seconds: ((.[$key].seconds // 0) + $seconds),
+       count: ((.[$key].count // 0) + 1)
+     }' "$PLAYS_FILE" >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$PLAYS_FILE"
+  else
+    rm -f "$tmp"
+  fi
+}
 
-tmp=$(mktemp -t arcade-plays-XXXXXX.json) || exit "$status"
-if jq \
-  --arg key "$ROM" \
-  --argjson lastPlayed "$ended" \
-  --argjson seconds "$(( ended - started ))" \
-  '.[$key] = {
-     lastPlayed: $lastPlayed,
-     seconds: ((.[$key].seconds // 0) + $seconds),
-     count: ((.[$key].count // 0) + 1)
-   }' "$PLAYS_FILE" >"$tmp" 2>/dev/null; then
-  mv -f "$tmp" "$PLAYS_FILE"
-else
-  rm -f "$tmp"
-fi
+record_session
 
 exit "$status"
