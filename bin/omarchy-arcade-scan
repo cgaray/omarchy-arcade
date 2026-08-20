@@ -246,13 +246,14 @@ emit_games() {
         #   3. our extension map (which cores.conf can override)
         # A ROM none of them can answer for is skipped rather than launched
         # under a guess.
-        local core
+        local ext core
+        ext=$(effective_ext "$rom") || ext=""
         core=$(core_path_for "$core_hint") \
           || core=$(core_path_for "$playlist_core") \
-          || core=$(core_path_for "$(ext_core_for "$rom")") \
+          || core=$(core_path_for "$(ext_core_for "$rom" "$ext")") \
           || continue
 
-        if add_game "$rom" "$label" "${db%.lpl}" "$core"; then
+        if add_game "$rom" "$label" "${db%.lpl}" "$core" "$ext"; then
           SEEN_ROM["$rom"]=1
           playlist_count=$((playlist_count + 1))
         fi
@@ -271,13 +272,14 @@ emit_games() {
     while IFS= read -r -d '' rom; do
       [[ -z ${SEEN_ROM["$rom"]:-} ]] || continue
 
-      local core_name core
-      core_name=$(ext_core_for "$rom") || continue
+      local ext core_name core
+      ext=$(effective_ext "$rom") || continue
+      core_name=$(ext_core_for "$rom" "$ext") || continue
       core=$(core_path_for "$core_name") || continue
 
       local label
       label=$(walk_label "$rom")
-      if add_game "$rom" "$label" "" "$core"; then
+      if add_game "$rom" "$label" "" "$core" "$ext"; then
         walk_count=$((walk_count + 1))
       fi
     done < <(find "$ROM_DIR" -type f -print0 2>/dev/null)
@@ -291,14 +293,23 @@ emit_games() {
   # Keep the full library on jq's stdin. Passing the accumulated JSON through
   # --argjson made large libraries hit the OS argument-size limit and produced
   # an empty scanner result to QML.
-  jq -s --argjson plays "$plays_json" \
+  jq -Rs --argjson plays "$plays_json" \
     --argjson cores "$CORES_JSON" \
     --arg romDir "$ROM_DIR" \
     --arg playlistDir "$PLAYLIST_DIR" \
     --argjson fromPlaylists "$playlist_count" \
     --argjson fromWalk "$walk_count" \
     --argjson retroarch "$RETROARCH_PRESENT" '
-    map(. as $game
+    (split("\u0000")
+      | if .[-1] == "" then .[:-1] else . end
+      | [range(0; length; 11) as $i
+        | {
+            key: .[$i], title: .[$i + 1], system: .[$i + 2], ext: .[$i + 3],
+            core: .[$i + 4], coreName: .[$i + 5], rom: .[$i + 6], art: .[$i + 7],
+            resumeSlot: .[$i + 8], resumeAt: (.[ $i + 9 ] | tonumber),
+            resumeArt: .[$i + 10]
+          }])
+    | map(. as $game
       | ($plays[$game.rom] // {}) as $play
       | $game + {
           lastPlayed: (($play.lastPlayed // 0) | floor),
@@ -378,13 +389,16 @@ effective_ext() {
   local base="${rom##*/}"
 
   if [[ $base == *.* ]]; then
-    tr '[:upper:]' '[:lower:]' <<<"${base##*.}"
+    local ext="${base##*.}"
+    printf '%s' "${ext,,}"
     return 0
   fi
 
   local dir="${rom%/*}"
   dir="${dir##*/}"
-  dir="$(tr '[:upper:]' '[:lower:]' <<<"$dir" | tr -d ' _')"
+  dir="${dir,,}"
+  dir="${dir// /}"
+  dir="${dir//_/}"
   if [[ -n ${DIR_EXT[$dir]:-} ]]; then
     printf '%s' "${DIR_EXT[$dir]}"
     return 0
@@ -438,8 +452,8 @@ walk_label() {
 }
 
 ext_core_for() {
-  local ext
-  ext=$(effective_ext "$1") || return 1
+  local ext="${2:-}"
+  [[ -n $ext ]] || ext=$(effective_ext "$1") || return 1
   [[ -n $ext ]] || return 1
 
   # A recorded choice wins, but only while that core is still installed --
@@ -466,7 +480,7 @@ ext_ambiguous() {
 }
 
 add_game() {
-  local rom="$1" label="$2" db="$3" core="$4"
+  local rom="$1" label="$2" db="$3" core="$4" ext="${5:-}"
 
   local art=""
   art=$(boxart_for "$db" "$label") || art=""
@@ -479,8 +493,7 @@ add_game() {
   local core_name="${core##*/}"
   core_name="${core_name%_libretro.so}"
 
-  local ext
-  ext=$(effective_ext "$rom") || ext=""
+  [[ -n $ext ]] || ext=$(effective_ext "$rom") || ext=""
 
   # A walked ROM has no playlist to name its system, so borrow the one
   # RetroArch attributes to the core that will run it. Deliberately after
@@ -488,23 +501,8 @@ add_game() {
   # system name is not one.
   [[ -n $db ]] || db="${CORE_SYSTEM[$core_name]:-}"
 
-  jq -c \
-    --arg key "$rom" \
-    --arg ext "$ext" \
-    --arg title "$label" \
-    --arg system "$db" \
-    --arg core "$core" \
-    --arg coreName "$core_name" \
-    --arg rom "$rom" \
-    --arg art "$art" \
-    --arg resumeSlot "$slot" \
-    --argjson resumeAt "${resume_at:-0}" \
-    --arg resumeArt "$resume_art" \
-    -n '{
-      key: $key, title: $title, system: $system, ext: $ext,
-      core: $core, coreName: $coreName, rom: $rom, art: $art,
-      resumeSlot: $resumeSlot, resumeAt: $resumeAt, resumeArt: $resumeArt
-    }' >>"$RECORDS_FILE"
+  printf '%s\0' "$rom" "$label" "$db" "$ext" "$core" "$core_name" \
+    "$rom" "$art" "$slot" "${resume_at:-0}" "$resume_art" >>"$RECORDS_FILE"
 }
 
 # A cheap signature of everything a scan depends on: the ROM tree, the save
