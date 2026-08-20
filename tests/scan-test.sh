@@ -366,6 +366,12 @@ out=$(run_scan)
 check "a malformed playlist does not take the scan down with it" \
   "true" "$(jq '[.games[].title] | contains(["Super Mario World"])' <<<"$out")"
 
+# The hot-path JSON encoder must preserve characters jq used to quote for us.
+touch "$FIXTURE/roms/Quoted \"Title\".sfc"
+out=$(run_scan)
+check "a quote in a filename survives JSON encoding" \
+  "true" "$(jq '[.games[].title] | contains(["Quoted \u0022Title\u0022"])' <<<"$out")"
+
 # --- Fingerprint -------------------------------------------------------------
 
 # The panel polls this instead of rescanning, so it has to change whenever a
