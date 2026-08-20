@@ -128,7 +128,7 @@ state_core_key() {
   local name="$1"
   name="${name##*/}"
   name="${name%_libretro.so}"
-  tr '[:upper:]' '[:lower:]' <<<"$name"
+  printf '%s' "${name,,}"
 }
 
 index_states() {
@@ -465,19 +465,6 @@ ext_ambiguous() {
   [[ $candidates == *" "* ]]
 }
 
-JSON_ESCAPED=""
-
-json_escape() {
-  JSON_ESCAPED="$1"
-  JSON_ESCAPED=${JSON_ESCAPED//\\/\\\\}
-  JSON_ESCAPED=${JSON_ESCAPED//\"/\\\"}
-  JSON_ESCAPED=${JSON_ESCAPED//$'\n'/\\n}
-  JSON_ESCAPED=${JSON_ESCAPED//$'\r'/\\r}
-  JSON_ESCAPED=${JSON_ESCAPED//$'\t'/\\t}
-  JSON_ESCAPED=${JSON_ESCAPED//$'\b'/\\b}
-  JSON_ESCAPED=${JSON_ESCAPED//$'\f'/\\f}
-}
-
 add_game() {
   local rom="$1" label="$2" db="$3" core="$4"
 
@@ -501,23 +488,23 @@ add_game() {
   # system name is not one.
   [[ -n $db ]] || db="${CORE_SYSTEM[$core_name]:-}"
 
-  local key_json ext_json title_json system_json core_json core_name_json
-  local rom_json art_json slot_json resume_art_json
-  json_escape "$rom"; key_json="\"$JSON_ESCAPED\""
-  json_escape "$ext"; ext_json="\"$JSON_ESCAPED\""
-  json_escape "$label"; title_json="\"$JSON_ESCAPED\""
-  json_escape "$db"; system_json="\"$JSON_ESCAPED\""
-  json_escape "$core"; core_json="\"$JSON_ESCAPED\""
-  json_escape "$core_name"; core_name_json="\"$JSON_ESCAPED\""
-  rom_json="$key_json"
-  json_escape "$art"; art_json="\"$JSON_ESCAPED\""
-  json_escape "$slot"; slot_json="\"$JSON_ESCAPED\""
-  json_escape "$resume_art"; resume_art_json="\"$JSON_ESCAPED\""
-
-  printf '{"key":%s,"title":%s,"system":%s,"ext":%s,"core":%s,"coreName":%s,"rom":%s,"art":%s,"resumeSlot":%s,"resumeAt":%s,"resumeArt":%s}\n' \
-    "$key_json" "$title_json" "$system_json" "$ext_json" "$core_json" \
-    "$core_name_json" "$rom_json" "$art_json" "$slot_json" \
-    "${resume_at:-0}" "$resume_art_json" >>"$RECORDS_FILE"
+  jq -c \
+    --arg key "$rom" \
+    --arg ext "$ext" \
+    --arg title "$label" \
+    --arg system "$db" \
+    --arg core "$core" \
+    --arg coreName "$core_name" \
+    --arg rom "$rom" \
+    --arg art "$art" \
+    --arg resumeSlot "$slot" \
+    --argjson resumeAt "${resume_at:-0}" \
+    --arg resumeArt "$resume_art" \
+    -n '{
+      key: $key, title: $title, system: $system, ext: $ext,
+      core: $core, coreName: $coreName, rom: $rom, art: $art,
+      resumeSlot: $resumeSlot, resumeAt: $resumeAt, resumeArt: $resumeArt
+    }' >>"$RECORDS_FILE"
 }
 
 # A cheap signature of everything a scan depends on: the ROM tree, the save
