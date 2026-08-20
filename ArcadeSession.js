@@ -26,11 +26,6 @@ function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly) {
   }
 }
 
-function scannerEnvironment(settings) {
-  var config = settings || {}
-  return { "ARCADE_ROM_DIR": String(config.romDir || "") }
-}
-
 function launchRequest(game, settings, resume, launcherPath) {
   if (!game) return []
   var config = settings || {}
@@ -50,7 +45,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     parseScan: parseScan,
     rebuild: rebuild,
-    scannerEnvironment: scannerEnvironment,
     launchRequest: launchRequest,
     fingerprintChanged: fingerprintChanged
   }

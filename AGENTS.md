@@ -12,12 +12,12 @@
 - `Panel.qml` and `Overlay.qml` are separate shell entrypoints and object trees. They share disk state through `omarchy-arcade-scan`, `cores.conf`, and save states, not runtime QML state.
 - `Library.js` must remain plain ES5-compatible, free of QML/Quickshell imports, and export its functions for Node tests. QML-only pragmas are stripped by `tests/library-test.js`.
 - `ArcadeSession.js` is the pure orchestration seam shared by both QML surfaces; keep process/timer objects and navigation in QML, and keep session functions Node-testable.
-- `bin/omarchy-arcade-scan` owns library discovery and emits one JSON document; playlist entries and the ROM walk are a union, with playlist metadata winning for duplicate ROM paths.
+- `bin/omarchy-arcade-scan` reads RetroArch playlists and emits one JSON document; playlist metadata is the library source.
 - `bin/omarchy-arcade-launch` owns RetroArch invocation, desktop-state suppression/restoration, and playtime persistence. Preserve its `trap`-based restoration on normal exit, failure, and signals.
 - QML process commands use absolute paths. Plugin helpers resolve from `pluginDir`; Omarchy commands resolve from `$OMARCHY_PATH/bin` because detached processes do not inherit a login shell `PATH`.
-- When changing scan or launch behavior, update both QML surfaces or deliberately centralize the shared behavior; Panel settings such as `romDir`, notification suppression, and idle suppression must not silently diverge from Overlay behavior.
+- When changing scan or launch behavior, update both QML surfaces or deliberately centralize the shared behavior; launch settings must stay consistent across surfaces.
 
 ## Runtime Fixtures
 
-- Scanner behavior depends on `RA_CONFIG_DIR`, `XDG_STATE_HOME`, `XDG_CONFIG_HOME`, and optionally `ARCADE_ROM_DIR`; use these variables with temporary directories for focused manual checks.
-- The scanner requires `jq`; extensionless ROM classification also uses directory conventions or `file`/libmagic. Missing or unmappable ROMs should be skipped rather than assigned a guessed core.
+- Scanner behavior depends on `RA_CONFIG_DIR`, `XDG_STATE_HOME`, and `XDG_CONFIG_HOME`; use these variables with temporary directories for focused manual checks.
+- The scanner requires `jq`. Playlist entries without an installed core should be skipped.

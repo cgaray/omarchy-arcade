@@ -23,17 +23,11 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  // Single-sourced: browseAll() referenced root.pluginId when only pluginDir
-  // existed, and QML reads an undeclared property as undefined without a
-  // murmur -- so the spawn got a broken argv and did nothing at all.
+  // Use one ID for plugin paths and shell commands.
   readonly property string pluginId: "io.github.cgaray.arcade"
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/" + pluginId
 
-  // Commands are spawned by absolute path. execDetached does not go through a
-  // shell and does not inherit a login PATH, so a bare "omarchy-shell" here
-  // silently spawned nothing -- which is exactly how the "b" shortcut and the
-  // install button came to do nothing at all. Every first-party plugin that
-  // spawns an Omarchy command resolves it through OMARCHY_PATH; so do we.
+  // Detached commands need absolute paths.
   readonly property string omarchyBin: Quickshell.env("OMARCHY_PATH") + "/bin"
 
 
@@ -62,11 +56,7 @@ Panel {
   property bool cursorActive: false
   property int cursorIndex: 0
 
-  // Tab walks the panel's three landing places in the order they are drawn:
-  // the search box, the system row, then the games. Zones that are not on
-  // screen -- no search box before anything is scanned, no system row in a
-  // single-system library -- drop out of the cycle rather than becoming a
-  // Tab press that appears to do nothing.
+  // Tab cycles through visible search, system, and list zones.
   property string focusZone: "list"
   property int systemCursor: 0
 
@@ -81,9 +71,7 @@ Panel {
   readonly property int maxLibraryRows: Math.max(10, root.setting("maxLibraryRows", 40))
   readonly property int refreshIntervalSec: Math.max(30, root.setting("refreshIntervalSec", 300))
 
-  // One flat list of everything the cursor can land on, Continue first. Built
-  // from the same arrays the view renders, so a row can never be reachable by
-  // keyboard but missing from the panel, or the reverse.
+  // Keep keyboard targets in display order.
   readonly property var cursorTargets: {
     var out = []
     for (var i = 0; i < continueRows.length; i++) out.push({ kind: "continue", game: continueRows[i] })
@@ -98,9 +86,7 @@ Panel {
   function targetKey(kind, game) { return kind + ":" + (game ? game.key : "") }
   function selectedKey() { return selectedTarget ? targetKey(selectedTarget.kind, selectedTarget.game) : "" }
 
-  // A Column inside a Flickable does no scrolling of its own, so walking the
-  // cursor past the fold used to move a selection nobody could see. Ask the
-  // row where it ended up and bring it back into view.
+  // Keep the selected row inside the visible panel area.
   function ensureVisible(item) {
     if (!item || !panelFlick) return
     Qt.callLater(function () {
@@ -161,8 +147,7 @@ Panel {
       return
     }
     if (zone === "systems") {
-      // Land on whichever chip is currently in force, so Tab into the row
-      // does not silently move the selection.
+      // Start on the active system chip.
       root.systemCursor = root.systemIndexOf(root.systemFilter)
     }
     if (zone === "list") root.cursorActive = true
@@ -230,7 +215,6 @@ Panel {
 
   function sessionSettings() {
     return {
-      romDir: String(root.setting("romDir", "") || ""),
       silenceNotifications: root.setting("silenceNotifications", true),
       stayAwake: root.setting("stayAwake", true)
     }
@@ -292,7 +276,6 @@ Panel {
   Process {
     id: scanProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan"]
-    environment: Session.scannerEnvironment(root.sessionSettings())
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyScan(text)
@@ -311,7 +294,6 @@ Panel {
   Process {
     id: watchProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan", "--fingerprint"]
-    environment: Session.scannerEnvironment(root.sessionSettings())
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {

@@ -2,9 +2,7 @@
 
 # Integration test for omarchy-arcade-scan against a fixture library.
 #
-# Builds a throwaway RetroArch config directory, a fake core, and a ROM folder,
-# then asserts on the JSON the scanner emits. Nothing here touches the real
-# ~/.config/retroarch, and no emulator is launched.
+# Builds a throwaway RetroArch config and fake cores, then checks scanner JSON.
 
 set -uo pipefail
 
@@ -75,14 +73,32 @@ run_scan() {
   "$SCAN"
 }
 
-# --- Walk source -------------------------------------------------------------
+# --- Playlist source ---------------------------------------------------------
+
+cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
+{
+  "version": "1.5",
+  "items": [
+    { "path": "$FIXTURE/roms/Super Mario World (USA).sfc", "label": "Super Mario World", "core_path": "DETECT" },
+    { "path": "$FIXTURE/roms/Tom's Adventure.sfc", "label": "Tom's Adventure", "core_path": "DETECT" }
+  ]
+}
+LPL
+cat >"$FIXTURE/ra/playlists/Nintendo - Game Boy.lpl" <<LPL
+{
+  "version": "1.5",
+  "items": [
+    { "path": "$FIXTURE/roms/Pinball.gb", "label": "Pinball", "core_path": "DETECT" }
+  ]
+}
+LPL
 
 out=$(run_scan) || { echo "FAIL: scanner exited non-zero"; exit 1; }
 
 jq -e . >/dev/null 2>&1 <<<"$out" || { echo "FAIL: scanner did not emit valid JSON"; exit 1; }
 passed=$((passed + 1))
 
-check "walk finds only mapped extensions" \
+check "playlist entries form the library" \
   "3" "$(jq '.games | length' <<<"$out")"
 
 check "unmapped extensions are skipped" \
@@ -91,61 +107,21 @@ check "unmapped extensions are skipped" \
 check "ambiguous .zip is skipped rather than guessed" \
   "0" "$(jq '[.games[] | select(.title == "arcade-set")] | length' <<<"$out")"
 
-check "titles drop the extension" \
-  "true" "$(jq '[.games[].title] | contains(["Super Mario World (USA)"])' <<<"$out")"
+check "playlist labels define titles" \
+  "true" "$(jq '[.games[].title] | contains(["Super Mario World"])' <<<"$out")"
 
 check "an apostrophe in a filename survives" \
   "true" "$(jq '[.games[].title] | contains(["Tom'"'"'s Adventure"])' <<<"$out")"
 
-check "extension picks the core" \
+check "DETECT entries resolve through the core map" \
   "gambatte" "$(jq -r '.games[] | select(.title == "Pinball") | .coreName' <<<"$out")"
 
 check "games are sorted by title" \
   "true" "$(jq '[.games[].title] == ([.games[].title] | sort_by(ascii_downcase))' <<<"$out")"
 
-check "walk games start with no resume" \
+check "playlist games start with no resume" \
   "0" "$(jq '[.games[] | select(.resumeAt > 0)] | length' <<<"$out")"
 
-check "meta reports the walk source" \
-  "3" "$(jq '.meta.fromWalk' <<<"$out")"
-
-# --- Extensionless ROMs ------------------------------------------------------
-
-# Most of a downloaded collection has no extension at all, and `${rom##*.}` on
-# a name with no dot returns the whole name -- which used to match nothing and
-# drop the file silently. The folder is the hint, per the roms/<system>/
-# convention.
-mkdir -p "$FIXTURE/roms/snes" "$FIXTURE/roms/mystery"
-touch "$FIXTURE/roms/snes/chronotrigger"
-touch "$FIXTURE/roms/snes/donkeykongcountry"
-out=$(run_scan)
-
-check "an extensionless ROM under roms/snes/ is found" \
-  "true" "$(jq '[.games[].title] | contains(["chronotrigger"])' <<<"$out")"
-
-check "the folder decides its extension" \
-  "sfc" "$(jq -r '.games[] | select(.title == "chronotrigger") | .ext' <<<"$out")"
-
-check "and therefore its core" \
-  "snes9x" "$(jq -r '.games[] | select(.title == "chronotrigger") | .coreName' <<<"$out")"
-
-# An empty file in a folder that names no system, with nothing for libmagic to
-# recognise, cannot be placed. It is left out rather than launched blind.
-touch "$FIXTURE/roms/mystery/whatisthis"
-out=$(run_scan)
-check "an unplaceable extensionless file is skipped, not guessed" \
-  "0" "$(jq '[.games[] | select(.title == "whatisthis")] | length' <<<"$out")"
-
-check "a filename with no dot never becomes its own extension" \
-  "0" "$(jq '[.games[] | select(.ext == "chronotrigger")] | length' <<<"$out")"
-
-# A real extension still wins over the folder it happens to sit in.
-touch "$FIXTURE/roms/snes/handheld.gb"
-out=$(run_scan)
-check "an explicit extension outranks the folder name" \
-  "gb" "$(jq -r '.games[] | select(.title == "handheld") | .ext' <<<"$out")"
-
-rm -rf "$FIXTURE/roms/snes" "$FIXTURE/roms/mystery"
 
 # --- Save states -------------------------------------------------------------
 
@@ -178,10 +154,10 @@ touch "$FIXTURE/ra/states/Snes9x/Super Mario World (USA).state1.png"
 out=$(run_scan)
 
 check "states in a per-core subdirectory are found" \
-  "1" "$(jq -r '.games[] | select(.title == "Super Mario World (USA)") | .resumeSlot' <<<"$out")"
+  "1" "$(jq -r '.games[] | select(.title == "Super Mario World") | .resumeSlot' <<<"$out")"
 
 check "a subdirectory state's thumbnail is found" \
-  "true" "$(jq -r '.games[] | select(.title == "Super Mario World (USA)") | (.resumeArt | endswith(".state1.png"))' <<<"$out")"
+  "true" "$(jq -r '.games[] | select(.title == "Super Mario World") | (.resumeArt | endswith(".state1.png"))' <<<"$out")"
 
 # States in a core directory must not collide with a same-basename state for a
 # different core. The core-specific state is newer and should win for Pinball.
@@ -199,9 +175,16 @@ check "a state thumbnail is never mistaken for a state" \
 
 mkdir -p "$FIXTURE/config/omarchy/arcade"
 cat >"$FIXTURE/config/omarchy/arcade/cores.conf" <<CONF
-# users with an unambiguous library can claim an extension
 zip = snes9x
 CONF
+cat >"$FIXTURE/ra/playlists/Ambiguous.lpl" <<LPL
+{
+  "version": "1.5",
+  "items": [
+    { "path": "$FIXTURE/roms/arcade-set.zip", "label": "arcade-set", "core_path": "DETECT" }
+  ]
+}
+LPL
 out=$(run_scan)
 check "cores.conf can claim an ambiguous extension" \
   "snes9x" "$(jq -r '.games[] | select(.title == "arcade-set") | .coreName' <<<"$out")"
@@ -234,17 +217,12 @@ touch "$FIXTURE/ra/thumbnails/Nintendo - Super Nintendo Entertainment System/Nam
 
 out=$(run_scan)
 
-# A library is normally part scanned and part not, so the two sources union.
-# Suppressing the walk once a playlist existed hid every ROM the user had not
-# imported yet -- which was most of them.
-check "the walk still runs alongside a playlist" \
-  "true" "$(jq '.meta.fromWalk > 0' <<<"$out")"
 
 check "playlist entries are used" \
   "true" "$(jq '[.games[] | select(.title == "Super Mario World")] | length == 1' <<<"$out")"
 
-check "unscanned ROMs are not hidden by a playlist" \
-  "true" "$(jq '[.games[].title] | contains(["Pinball"])' <<<"$out")"
+check "ROMs absent from playlists are hidden" \
+  "false" "$(jq '[.games[].title] | contains(["notes"])' <<<"$out")"
 
 check "a ROM in both sources appears exactly once" \
   "true" "$(jq '.games | map(.rom) | (length == (unique | length))' <<<"$out")"
@@ -262,11 +240,8 @@ check "the system name comes from the playlist" \
   "Nintendo - Super Nintendo Entertainment System" \
   "$(jq -r '.games[] | select(.title == "Super Mario World") | .system' <<<"$out")"
 
-# A walked ROM has no playlist to name its system, so it borrows the system
-# RetroArch attributes to the core that will run it -- otherwise the library
-# cannot be grouped or browsed by system at all.
-check "a walked ROM takes its system from the core that runs it" \
-  "Game Boy" "$(jq -r '.games[] | select(.title == "Pinball") | .system' <<<"$out")"
+check "a playlist entry supplies its system" \
+  "Nintendo - Game Boy" "$(jq -r '.games[] | select(.title == "Pinball") | .system' <<<"$out")"
 
 # --- Which core runs the ROM -------------------------------------------------
 
@@ -366,12 +341,6 @@ out=$(run_scan)
 check "a malformed playlist does not take the scan down with it" \
   "true" "$(jq '[.games[].title] | contains(["Super Mario World"])' <<<"$out")"
 
-# The hot-path JSON encoder must preserve characters jq used to quote for us.
-touch "$FIXTURE/roms/Quoted \"Title\".sfc"
-out=$(run_scan)
-check "a quote in a filename survives JSON encoding" \
-  "true" "$(jq '[.games[].title] | contains(["Quoted \u0022Title\u0022"])' <<<"$out")"
-
 # --- Fingerprint -------------------------------------------------------------
 
 # The panel polls this instead of rescanning, so it has to change whenever a
@@ -388,13 +357,13 @@ check "the fingerprint is stable when nothing changed" "$before" "$(fp)"
 
 check "the fingerprint is not empty" "true" "$([[ -n $before ]] && echo true || echo false)"
 
-touch "$FIXTURE/roms/Newly Added.sfc"
-check "a new ROM changes the fingerprint" \
+touch "$FIXTURE/ra/playlists/New.lpl"
+check "a new playlist changes the fingerprint" \
   "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
 
 before=$(fp)
-rm -f "$FIXTURE/roms/Newly Added.sfc"
-check "a removed ROM changes the fingerprint" \
+rm -f "$FIXTURE/ra/playlists/New.lpl"
+check "a removed playlist changes the fingerprint" \
   "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
 
 before=$(fp)

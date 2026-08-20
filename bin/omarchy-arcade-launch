@@ -2,13 +2,7 @@
 
 # Launch a game and hold the desktop still while it runs.
 #
-# The launching part is three flags to RetroArch. The part worth having a
-# script for is everything around it: an emulator that takes over the screen
-# should not be interrupted by a notification toast, and should not have the
-# screensaver come down over it during a cutscene. Both are things only
-# something running inside Omarchy can arrange, and both are restored on the
-# way out -- including when the game crashes, which is why the restore runs
-# from a trap rather than the last line.
+# Launch the emulator and restore desktop settings after the session.
 
 set -uo pipefail
 

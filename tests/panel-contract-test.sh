@@ -1,13 +1,6 @@
 #!/bin/bash
 
-# Checks the bar-widget contract that has no compile-time enforcement.
-#
-# qmllint cannot help here: a file whose root type comes from qs.Ui (Panel)
-# is unresolvable without Quickshell's type information, so qmllint exits
-# non-zero on every bar widget including the first-party ones. What it would
-# not have caught anyway is the contract below -- the shell loads a widget
-# missing any of it without a single warning, and it renders as a gap in the
-# bar. Each check here is a bug that actually happened.
+# Check the bar-widget contract that qmllint cannot resolve.
 
 set -uo pipefail
 
@@ -38,10 +31,7 @@ check "the entry point exists" "yes" "$([[ -f $ROOT/$ENTRY ]] && echo yes || ech
 check "the manifest declares the bar-widget kind" \
   "true" "$(jq '(.kinds | index("bar-widget")) != null' "$MANIFEST")"
 
-# The plugin ships two surfaces from one id. The shell instantiates them as
-# separate object trees through separate code paths, and a kind declared
-# without its entry point loads as nothing at all with only a console line to
-# explain it -- so check the pairing here.
+# Check the overlay kind and entry point.
 OVERLAY=$(jq -r '.entryPoints.overlay // ""' "$MANIFEST")
 check "the manifest declares the overlay kind" \
   "true" "$(jq '(.kinds | index("overlay")) != null' "$MANIFEST")"
@@ -50,7 +40,7 @@ check "the manifest names an overlay entry point" "Overlay.qml" "$OVERLAY"
 
 check "the overlay entry point exists" "yes" "$([[ -f $ROOT/$OVERLAY ]] && echo yes || echo no)"
 
-# The shell calls these by name on the loaded object; a rename is silent.
+# Check the overlay lifecycle functions.
 for fn in "function open" "function close" "function toggle"; do
   check "the overlay defines $fn" \
     "true" "$(grep -qE "^\s*$fn\(" "$ROOT/$OVERLAY" && echo true || echo false)"
@@ -65,8 +55,7 @@ for script in omarchy-arcade-scan omarchy-arcade-launch; do
     "true" "$(grep -qF "$script" "$ROOT/$OVERLAY" && echo true || echo false)"
 done
 
-# A bar-widget id that is not also in barWidget.displayName territory shows up
-# in the bar settings list with no name at all.
+# Check the widget display name.
 check "the widget has a display name" \
   "true" "$(jq '((.barWidget.displayName // "") | length) > 0' "$MANIFEST")"
 
@@ -78,9 +67,7 @@ PANEL="$ROOT/$ENTRY"
 check "the root type is Ui.Panel" \
   "1" "$(grep -cE '^Panel \{' "$PANEL")"
 
-# The bar sizes each slot from its widget's implicit size. A root that reports
-# nothing collapses the slot to zero width, and the widget silently renders as
-# a gap -- no warning, no error, nothing in the log.
+# Check the root size contract.
 check "the root forwards implicitWidth from the bar button" \
   "1" "$(grep -cE '^\s*implicitWidth: button\.implicitWidth' "$PANEL")"
 
@@ -99,8 +86,7 @@ if grep -qE '^\s*manageIpc: false' "$PANEL"; then
     "1" "$(grep -cE "^\s*target: \"$(jq -r .id "$MANIFEST")\"" "$PANEL")"
 fi
 
-# Both helper scripts are spawned by path from the panel, so a rename that
-# misses one is a button that does nothing.
+# Check helper paths and permissions.
 for script in omarchy-arcade-scan omarchy-arcade-launch; do
   check "$script is referenced by the panel" \
     "true" "$(grep -qF "$script" "$PANEL" && echo true || echo false)"
@@ -108,13 +94,7 @@ for script in omarchy-arcade-scan omarchy-arcade-launch; do
     "true" "$([[ -x $ROOT/bin/$script ]] && echo true || echo false)"
 done
 
-# execDetached does not go through a shell and does not inherit a login PATH,
-# so a bare command name spawns nothing at all -- no error, no log line. Every
-# spawn must therefore be an absolute path built from OMARCHY_PATH or the
-# plugin directory. This is the bug that made "b" and the install button no-ops.
-# Only the first element is the binary; later elements are arguments, and one
-# of them is legitimately a bare command name handed to a terminal launcher
-# that does go through a shell.
+# Detached commands must use absolute executable paths.
 for qml in "$PANEL" "$ROOT/$OVERLAY"; do
   bare=$(grep -A1 'execDetached(\[$' "$qml" | grep -cE '^\s*"[a-z][a-z0-9-]*"' || true)
   check "$(basename "$qml") spawns nothing by bare command name" "0" "$bare"

@@ -25,11 +25,7 @@ Item {
   readonly property string pluginId: (root.manifest && root.manifest.id) || "io.github.cgaray.arcade"
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/" + pluginId
 
-  // Commands are spawned by absolute path. execDetached does not go through a
-  // shell and does not inherit a login PATH, so a bare "omarchy-shell" here
-  // silently spawned nothing -- which is exactly how the "b" shortcut and the
-  // install button came to do nothing at all. Every first-party plugin that
-  // spawns an Omarchy command resolves it through OMARCHY_PATH; so do we.
+  // Detached commands need absolute paths.
   readonly property string omarchyBin: Quickshell.env("OMARCHY_PATH") + "/bin"
 
 
@@ -237,7 +233,6 @@ Item {
   Process {
     id: watchProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan", "--fingerprint"]
-    environment: Session.scannerEnvironment(root.sessionSettings)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -264,7 +259,6 @@ Item {
   Process {
     id: scanProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan"]
-    environment: Session.scannerEnvironment(root.sessionSettings)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyScan(text)

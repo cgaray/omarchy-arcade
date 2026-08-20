@@ -71,22 +71,12 @@ bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell summon io.gith
 
 ## Your library
 
-Arcade reads two sources, in this order:
+Arcade reads RetroArch playlists from
+`~/.config/retroarch/playlists/*.lpl`. RetroArch owns content scanning and
+provides the title, system, core hint, and database name.
 
-1. **RetroArch playlists** (`~/.config/retroarch/playlists/*.lpl`), which carry
-   the real title, the system name, and box art.
-2. **A walk of your ROM folder**, `~/Games/roms` on a stock Omarchy install,
-   including subfolders.
-
-The two are a union, not a fallback. Importing content into RetroArch is
-something people do a few games at a time, so a library is normally part
-scanned and part not — letting a playlist suppress the walk would hide every
-ROM you had not got round to importing. A ROM in both keeps the playlist's
-better metadata and appears once.
-
-Drop ROMs in `~/Games/roms` and they appear on their own — Arcade watches the
-folder, along with your save states, playlists, and core choices. `r` forces a
-rescan if you would rather not wait.
+Scan new content in RetroArch. Arcade watches playlists, save states, and core
+choices. Press `r` to refresh immediately.
 
 The watch is a poll, not an inotify watch: the scanner has a `--fingerprint`
 mode that signs the ROM tree in a few milliseconds, so the panel checks that
@@ -97,23 +87,11 @@ restart.
 
 Box art comes from RetroArch's own thumbnail cache — Arcade downloads nothing.
 
-### ROMs with no extension
-
-Most of a collection downloaded as a set has no file extension at all. Arcade
-places those two ways: the folder they sit in, following the `roms/<system>/`
-convention, and failing that libmagic, which recognises most ROM images by
-content. A file neither can place is left out.
-
-For a squashed filename like `thelegendofzeldaalinktothepast`, Arcade reads
-the name out of the ROM header instead — `The Legend of Zelda`. A filename
-someone clearly typed is never overwritten.
-
 ### Browsing by system
 
 Once a library spans more than one system, a filter row appears above it:
 `All · 101`, `NES · 49`, `SNES · 52`. Click one, or press `s` to walk them.
-Systems come from the playlist where there is one, and otherwise from the
-system RetroArch attributes to the core that will run the game.
+Systems come from the playlist.
 
 ## Which emulator runs a game
 
@@ -145,8 +123,8 @@ directory in RetroArch writes `"core_path": "DETECT"` on every entry, meaning
 4. **The first candidate** RetroArch's `.info` files offer, so the game is
    launchable while the choice is still outstanding.
 
-A core named by a playlist but not installed falls through instead of failing
-at launch, and a ROM nothing can place is left out rather than guessed at.
+A core named by a playlist but not installed falls through to the next choice.
+Entries without a usable core are omitted.
 
 ## Keys
 
@@ -180,7 +158,6 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 | `maxLibraryRows` | 40 | Caps rendered rows; search still covers everything. |
 | `silenceNotifications` | true | Do-not-disturb for the length of the game. |
 | `stayAwake` | true | Suppress idle and the lock screen while playing. |
-| `romDir` | "" | Override RetroArch's browser directory. |
 
 ## Layout
 
@@ -196,7 +173,7 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 Both scripts run standalone:
 
 ```bash
-./bin/omarchy-arcade-scan | jq '.games[0]'
+ ./bin/omarchy-arcade-scan | jq '.games[0]'
 ./bin/omarchy-arcade-launch --core /usr/lib/libretro/snes9x_libretro.so \
                             --rom ~/Games/roms/game.sfc --slot 0
 ```
@@ -207,26 +184,17 @@ Both scripts run standalone:
 ./tests/run.sh
 ```
 
-Manifest validation, `bash -n`, `qmllint` on `Library.js` and `Overlay.qml`, a
-plugin contract
-check, a QML reference lint, 49 unit tests over `Library.js`, and 44
-integration tests that run the
-scanner against a fixture library — including the full core-precedence chain,
-`DETECT` entries, uninstalled cores, extensionless ROMs, save states in
-per-core subdirectories, dead playlist entries, malformed playlists, and
-filenames with spaces and apostrophes. The fixture ships its own `.info` files
-so results do not depend on which cores the machine happens to have. No
-display, no running shell, no emulator.
+The suite validates the manifest, shell syntax, QML, plugin contracts, QML
+references, library helpers, launcher behavior, and playlist scanning. Fixture
+cores keep the scanner tests independent of the host system.
 
 ## Status
 
-Early, but working end to end: both surfaces, the Continue shelf with save
-state thumbnails, box art, search, per-system browsing, the core picker, both
-library sources, and the desktop integration. If RetroArch is not installed,
+Working end to end: both surfaces, the Continue shelf with save-state
+thumbnails, box art, search, per-system browsing, the core picker, playlist
+scanning, and desktop integration. If RetroArch is not installed,
 either surface says so and offers Omarchy's own installer.
 
-Not yet: Steam, Lutris, and Heroic as additional sources — the scanner is
-shaped for them, each being a function that appends to the same record shape.
 
 ## License
 

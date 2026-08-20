@@ -27,13 +27,9 @@ const game = (over) => Object.assign({
 }, over || {})
 
 const settings = {
-  romDir: "/custom/roms",
   silenceNotifications: false,
   stayAwake: false
 }
-
-assert.deepStrictEqual(Session.scannerEnvironment(settings), { ARCADE_ROM_DIR: "/custom/roms" })
-assert.deepStrictEqual(Session.scannerEnvironment({}), { ARCADE_ROM_DIR: "" })
 
 assert.deepStrictEqual(
   Session.launchRequest(game({ resumeSlot: "auto" }), settings, true, "/bin/launch"),

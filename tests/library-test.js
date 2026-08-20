@@ -64,11 +64,11 @@ test("parseLibrary reports non-JSON as an error", () => {
 })
 
 test("parseLibrary accepts a well-formed library", () => {
-  const r = Library.parseLibrary(JSON.stringify({ games: [game()], meta: { fromWalk: 1 } }))
+  const r = Library.parseLibrary(JSON.stringify({ games: [game()], meta: { fromPlaylists: 1 } }))
   assert.strictEqual(r.error, "")
   assert.strictEqual(r.games.length, 1)
   assert.strictEqual(r.games[0].title, "A Game")
-  assert.strictEqual(r.meta.fromWalk, 1)
+  assert.strictEqual(r.meta.fromPlaylists, 1)
 })
 
 test("parseLibrary drops entries with no ROM or no core", () => {

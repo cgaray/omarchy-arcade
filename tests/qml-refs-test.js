@@ -1,16 +1,4 @@
-// Every `root.something` in a QML file must resolve to something.
-//
-// QML reads an undeclared property as `undefined` and says nothing: no
-// warning at load, no error at use. `browseAll()` referenced `root.pluginId`
-// in a file that never declared it, so the spawn it built got an undefined
-// argv element and did nothing at all -- twice, across two rounds of manual
-// testing, before anyone thought to grep for the declaration.
-//
-// This is a lint, not a parser: it collects `root.X` reads and checks each
-// against the names the file declares plus the members its base type
-// provides. It cannot see into QML's real type system, so the allowlists are
-// hand-maintained -- but the failure it catches is silent, and silence is
-// exactly what a test is for.
+// Check that every root property reference has a local or inherited declaration.
 
 const fs = require("fs")
 const path = require("path")
@@ -53,7 +41,7 @@ for (const file of files) {
   for (const m of src.matchAll(/\broot\.(\w+)/g)) {
     checked += 1
     if (declared.has(m[1])) continue
-    // Report each name once, with the line it first appears on.
+    // Report each name at its first use.
     if (!missing.has(m[1])) {
       const line = src.slice(0, m.index).split("\n").length
       missing.set(m[1], line)
