@@ -122,6 +122,17 @@ check "games are sorted by title" \
 check "playlist games start with no resume" \
   "0" "$(jq '[.games[] | select(.resumeAt > 0)] | length' <<<"$out")"
 
+first_added=$(jq '.games[] | select(.title == "Super Mario World") | .addedAt' <<<"$out")
+check "games receive a first-discovered timestamp" \
+  "true" "$([[ $first_added -gt 0 ]] && echo true || echo false)"
+
+out=$(run_scan)
+check "the first-discovered timestamp survives later scans" \
+  "$first_added" "$(jq '.games[] | select(.title == "Super Mario World") | .addedAt' <<<"$out")"
+
+check "added dates are persisted as valid JSON state" \
+  "true" "$(jq -e 'type == "object"' "$FIXTURE/state/omarchy-arcade/added.json" >/dev/null 2>&1 && echo true || echo false)"
+
 
 # --- Save states -------------------------------------------------------------
 
@@ -381,6 +392,25 @@ before=$(fp)
 printf '# changed by test\n' >>"$FIXTURE/info/gambatte_libretro.info"
 check "core metadata changes the fingerprint" \
   "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
+
+# A game discovered by a later scan receives a newer timestamp without
+# changing the date of games already known to the library.
+sleep 1
+touch "$FIXTURE/roms/Later Addition.gb"
+cat >"$FIXTURE/ra/playlists/Added.lpl" <<LPL
+{
+  "version": "1.5",
+  "items": [
+    { "path": "$FIXTURE/roms/Later Addition.gb", "label": "Later Addition", "core_path": "DETECT" }
+  ]
+}
+LPL
+out=$(run_scan)
+later_added=$(jq '.games[] | select(.title == "Later Addition") | .addedAt' <<<"$out")
+check "newly discovered games receive a newer added date" \
+  "true" "$([[ $later_added -gt $first_added ]] && echo true || echo false)"
+check "adding another game does not rewrite an existing added date" \
+  "$first_added" "$(jq '.games[] | select(.title == "Super Mario World") | .addedAt' <<<"$out")"
 
 if (( failures )); then
   echo "scan-test: $passed passed, $failures failed"

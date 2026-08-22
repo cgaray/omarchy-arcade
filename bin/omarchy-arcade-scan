@@ -8,6 +8,7 @@ RA_CONFIG_DIR="${RA_CONFIG_DIR:-$HOME/.config/retroarch}"
 RA_CFG="$RA_CONFIG_DIR/retroarch.cfg"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-arcade"
 PLAYS_FILE="$STATE_DIR/plays.json"
+ADDED_FILE="$STATE_DIR/added.json"
 CORES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/arcade/cores.conf"
 INFO_DIR=""
 RECORDS_FILE=""
@@ -83,30 +84,29 @@ load_cores() {
 
 CORES_JSON="{}"
 
+# The helpers below set a result variable rather than printing to stdout:
+# capturing with $( ) forks a subshell per call, and at one call or more per
+# ROM that cost dominated the scan.
+
+# Resolves a core ID, filename, or absolute path to an installed .so.
 core_path_for() {
+  CORE_PATH=""
   local name="$1"
   [[ -n $name ]] || return 1
   # DETECT asks the scanner to resolve the core.
   [[ $name == DETECT ]] && return 1
   # Accept a core ID, filename, or absolute path.
   if [[ $name == /* ]]; then
-    [[ -f $name ]] && printf '%s' "$name" && return 0
+    if [[ -f $name ]]; then CORE_PATH="$name"; return 0; fi
     return 1
   fi
   local candidate="$CORE_DIR/${name%_libretro.so}_libretro.so"
-  [[ -f $candidate ]] && printf '%s' "$candidate" && return 0
+  if [[ -f $candidate ]]; then CORE_PATH="$candidate"; return 0; fi
   return 1
 }
 
 # Index save states by ROM basename and core directory.
 declare -A STATE_SLOT STATE_MTIME STATE_THUMB
-
-state_core_key() {
-  local name="$1"
-  name="${name##*/}"
-  name="${name%_libretro.so}"
-  printf '%s' "${name,,}"
-}
 
 index_states() {
   [[ -d $SAVESTATE_DIR ]] || return 0
@@ -121,7 +121,7 @@ index_states() {
       base="${fname%.state}"; slot=0
     elif [[ $fname == *.state.auto ]]; then
       base="${fname%.state.auto}"; slot=auto
-    elif [[ $fname =~ ^(.+)\.state([0-9])$ ]]; then
+    elif [[ $fname =~ ^(.+)\.state([0-9]+)$ ]]; then
       base="${BASH_REMATCH[1]}"; slot="${BASH_REMATCH[2]}"
     else
       continue
@@ -129,7 +129,10 @@ index_states() {
 
     relative="${f#"$SAVESTATE_DIR/"}"
     if [[ $relative == */* ]]; then
-      state_core=$(state_core_key "${relative%%/*}")
+      state_core="${relative%%/*}"
+      state_core="${state_core##*/}"
+      state_core="${state_core%_libretro.so}"
+      state_core="${state_core,,}"
     else
       state_core=""
     fi
@@ -143,33 +146,39 @@ index_states() {
   done < <(find "$SAVESTATE_DIR" -type f -print0 2>/dev/null)
 }
 
-# "slot<TAB>mtime<TAB>thumbnail" for a ROM, or non-zero when it has no state.
-# The slot is a string rather than a number because "auto" is a real slot that
-# no integer names, and reusing a negative integer for it collides with the
-# "no state at all" sentinel.
+# "slot<TAB>mtime<TAB>thumbnail" in STATE_INFO for a ROM, or non-zero when it
+# has no state. The slot is a string rather than a number because "auto" is a
+# real slot that no integer names, and reusing a negative integer for it
+# collides with the "no state at all" sentinel.
 newest_state() {
+  STATE_INFO=""
   local rom="$1" core="${2:-}"
   local base="${rom##*/}"
   base="${base%.*}"
-  local core_key
-  core_key=$(state_core_key "$core")
-  local key="$core_key|$base"
+  local core_key="" key
+  if [[ -n $core ]]; then
+    core_key="${core##*/}"
+    core_key="${core_key%_libretro.so}"
+    core_key="${core_key,,}"
+  fi
+  key="$core_key|$base"
   if [[ -z ${STATE_MTIME[$key]:-} ]]; then
     key="|$base"
   fi
   [[ -n ${STATE_MTIME[$key]:-} ]] || return 1
-  printf '%s\t%s\t%s' "${STATE_SLOT[$key]}" "${STATE_MTIME[$key]}" "${STATE_THUMB[$key]}"
+  printf -v STATE_INFO '%s\t%s\t%s' "${STATE_SLOT[$key]}" "${STATE_MTIME[$key]}" "${STATE_THUMB[$key]}"
 }
 
-# Resolve box art from the playlist database name.
+# Resolve box art from the playlist database name into BOXART.
 boxart_for() {
+  BOXART=""
   local db="$1" label="$2"
   [[ -n $db && -n $label ]] || return 1
   db="${db%.lpl}"
   # RetroArch replaces illegal thumbnail characters with "_".
   local safe="${label//[&*\/:\`<>?\\|\"]/_}"
   local candidate="$THUMBNAIL_DIR/$db/Named_Boxarts/$safe.png"
-  [[ -f $candidate ]] && printf '%s' "$candidate" && return 0
+  if [[ -f $candidate ]]; then BOXART="$candidate"; return 0; fi
   return 1
 }
 
@@ -181,47 +190,42 @@ emit_games() {
   index_states
   load_cores || true
 
-  # Read playlist entries.
+  # Read playlist entries. One jq per playlist streams NUL-delimited fields
+  # (path, label, core hint, pinned core) -- forking jq per ROM made a
+  # 400-game scan spend seconds in process spawns alone.
   if [[ -d $PLAYLIST_DIR ]]; then
     local lpl
     while IFS= read -r -d '' lpl; do
-      # A malformed playlist should cost its own entries, not the whole scan.
-      jq -e 'type == "object" and (.items | type == "array")' "$lpl" >/dev/null 2>&1 || continue
-      local db
-      db="${lpl##*/}"
-      # A playlist can pin one core for all of its entries. When it does, that
-      # is a deliberate choice by the user and outranks our extension guess.
-      local playlist_core
-      playlist_core=$(jq -r '.default_core_path // ""' "$lpl" 2>/dev/null)
-      local entries
-      entries=$(jq -c --arg db "$db" '
-        [ .items[]
-          | select((.path // "") != "" and (.label // "") != "")
-          | { path: .path, label: .label, core_path: (.core_path // ""), db: $db }
-        ]' "$lpl" 2>/dev/null) || continue
-
-      local entry
-      while IFS= read -r entry; do
-        [[ -n $entry ]] || continue
-        local rom label core_hint
-        rom=$(jq -r '.path' <<<"$entry")
-        label=$(jq -r '.label' <<<"$entry")
-        core_hint=$(jq -r '.core_path' <<<"$entry")
+      local db="${lpl##*/}"
+      # A malformed playlist should cost its own entries, not the whole scan:
+      # jq failing to parse, or the file not holding an object with an items
+      # array, both fall through here as an empty stream.
+      local rom label core_hint playlist_core ext core
+      while IFS= read -r -d '' rom && IFS= read -r -d '' label \
+        && IFS= read -r -d '' core_hint && IFS= read -r -d '' playlist_core; do
         # Ignore entries whose content file is missing.
         [[ -f $rom ]] || continue
 
         # Resolve the entry core in priority order.
-        local ext core
-        ext=$(effective_ext "$rom") || ext=""
-        core=$(core_path_for "$core_hint") \
-          || core=$(core_path_for "$playlist_core") \
-          || core=$(core_path_for "$(ext_core_for "$rom" "$ext")") \
-          || continue
+        effective_ext "$rom" || true
+        ext=$EXT
+        if core_path_for "$core_hint"; then core=$CORE_PATH
+        elif core_path_for "$playlist_core"; then core=$CORE_PATH
+        elif ext_core_for "$rom" "$ext" && core_path_for "$EXT_CORE"; then core=$CORE_PATH
+        else continue
+        fi
 
         if add_game "$rom" "$label" "${db%.lpl}" "$core" "$ext"; then
           playlist_count=$((playlist_count + 1))
         fi
-      done < <(jq -c '.[]' <<<"$entries" 2>/dev/null)
+      done < <(jq -j '
+        (if type == "object" and (.items | type) == "array"
+         then . else {items: []} end)
+        | (.default_core_path // "") as $pc
+        | .items[]
+        | select((.path // "") != "" and (.label // "") != "")
+        | ((.path // "") + "\u0000" + (.label // "") + "\u0000"
+           + ((.core_path // "")) + "\u0000" + ($pc + "\u0000"))' "$lpl" 2>/dev/null)
     done < <(find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -print0 2>/dev/null)
   fi
 
@@ -230,8 +234,19 @@ emit_games() {
     plays_json=$(jq -c 'if type == "object" then . else {} end' "$PLAYS_FILE" 2>/dev/null) || plays_json="{}"
   fi
 
-  # Read records from the scan file to keep the command line small.
-  jq -Rs --argjson plays "$plays_json" \
+  local added_json="{}"
+  if [[ -f $ADDED_FILE ]]; then
+    added_json=$(jq -c 'if type == "object" then . else {} end' "$ADDED_FILE" 2>/dev/null) || added_json="{}"
+  fi
+  local now
+  now=$(date +%s)
+
+  # Read records from the scan file to keep the command line small. The first
+  # document is the persistent first-seen index; the second is scanner output.
+  local -a documents=()
+  mapfile -t documents < <(jq -Rsc --argjson plays "$plays_json" \
+    --argjson added "$added_json" \
+    --argjson now "$now" \
     --argjson cores "$CORES_JSON" \
     --arg playlistDir "$PLAYLIST_DIR" \
     --argjson fromPlaylists "$playlist_count" \
@@ -253,9 +268,12 @@ emit_games() {
           playCount: (($play.count // 0) | floor)
         })
       | sort_by(.title | ascii_downcase) as $sorted
-     | ($sorted | map(.ext) | unique | map(select(. != ""))) as $exts
-     | {
-         games: $sorted,
+     | (reduce $sorted[] as $game ($added;
+          if has($game.rom) then . else .[$game.rom] = $now end)) as $nextAdded
+     | ($sorted | map(. + {addedAt: (($nextAdded[.rom] // $now) | floor)})) as $dated
+     | ($dated | map(.ext) | unique | map(select(. != ""))) as $exts
+     | $nextAdded, {
+         games: $dated,
          extensions: [
            $exts[]
            | . as $e
@@ -264,7 +282,7 @@ emit_games() {
                ext: $e,
                candidates: [ $cands[] | { id: .id, name: .corename, system: .system } ],
                chosen: ((($cores.choices // {})[$e]) // ""),
-               resolved: (($sorted | map(select(.ext == $e)) | first | .coreName) // "")
+               resolved: (($dated | map(select(.ext == $e)) | first | .coreName) // "")
              }
          ],
          meta: {
@@ -273,26 +291,45 @@ emit_games() {
             retroarchInstalled: $retroarch,
            coreCount: ((($cores.meta // {}).coreCount) // 0)
          }
-        }' "$RECORDS_FILE"
+         }' "$RECORDS_FILE")
+
+  [[ ${#documents[@]} -eq 2 ]] || die "could not build library output"
+  if [[ ${documents[0]} != "$added_json" ]]; then
+    mkdir -p "$STATE_DIR" || die "could not create state directory"
+    local added_tmp
+    added_tmp=$(mktemp "$STATE_DIR/.added-XXXXXX.json") || die "could not create added-state temp file"
+    if printf '%s\n' "${documents[0]}" >"$added_tmp"; then
+      mv -f "$added_tmp" "$ADDED_FILE"
+    else
+      rm -f "$added_tmp"
+      die "could not persist added dates"
+    fi
+  fi
+  printf '%s\n' "${documents[1]}"
 }
 
 effective_ext() {
+  EXT=""
   local base="${1##*/}"
   [[ $base == *.* ]] || return 1
-  local ext="${base##*.}"
-  printf '%s' "${ext,,}"
+  EXT="${base##*.}"
+  EXT="${EXT,,}"
 }
 
 ext_core_for() {
-  local ext="${2:-}"
-  [[ -n $ext ]] || ext=$(effective_ext "$1") || return 1
+  EXT_CORE=""
+  local rom="$1" ext="${2:-}"
+  if [[ -z $ext ]]; then
+    effective_ext "$rom" || return 1
+    ext=$EXT
+  fi
   [[ -n $ext ]] || return 1
 
   # A recorded choice wins, but only while that core is still installed --
   # uninstalling a core should not turn its games into dead rows.
   local chosen="${EXT_CHOICE[$ext]:-}"
-  if [[ -n $chosen ]] && core_path_for "$chosen" >/dev/null; then
-    printf '%s' "$chosen"
+  if [[ -n $chosen ]] && core_path_for "$chosen"; then
+    EXT_CORE="$chosen"
     return 0
   fi
 
@@ -300,32 +337,26 @@ ext_core_for() {
   [[ -n $candidates ]] || return 1
   # Deterministic: jq sorted the candidate list, so the same library resolves
   # the same way on every scan rather than shuffling under the user.
-  printf '%s' "${candidates%% *}"
+  EXT_CORE="${candidates%% *}"
 }
-
-# Is this extension one the user still has a decision to make about?
-ext_ambiguous() {
-  local ext="$1"
-  [[ -z ${EXT_CHOICE[$ext]:-} ]] || return 1
-  local candidates="${EXT_CANDIDATES[$ext]:-}"
-  [[ $candidates == *" "* ]]
-}
-
 add_game() {
   local rom="$1" label="$2" db="$3" core="$4" ext="${5:-}"
 
   local art=""
-  art=$(boxart_for "$db" "$label") || art=""
+  boxart_for "$db" "$label" && art=$BOXART
 
-  local slot="" resume_at=0 resume_art="" state
-  if state=$(newest_state "$rom" "$core"); then
-    IFS=$'\t' read -r slot resume_at resume_art <<<"$state"
+  local slot="" resume_at=0 resume_art=""
+  if newest_state "$rom" "$core"; then
+    IFS=$'\t' read -r slot resume_at resume_art <<<"$STATE_INFO"
   fi
 
   local core_name="${core##*/}"
   core_name="${core_name%_libretro.so}"
 
-  [[ -n $ext ]] || ext=$(effective_ext "$rom") || ext=""
+  if [[ -z $ext ]]; then
+    effective_ext "$rom" || true
+    ext=$EXT
+  fi
 
   # Use the core system when the playlist has no system name.
   [[ -n $db ]] || db="${CORE_SYSTEM[$core_name]:-}"
@@ -334,10 +365,15 @@ add_game() {
     "$rom" "$art" "$slot" "${resume_at:-0}" "$resume_art" >>"$RECORDS_FILE"
 }
 
-# A cheap signature of everything a scan depends on: the ROM tree, the save
-# states, the playlists, and the core choices. Milliseconds against a hundred
-# games, so the panel can poll it and only pay for a full rescan when
-# something has actually changed.
+# A cheap signature of everything a scan depends on: the save states, the
+# playlists, and the core choices. Milliseconds against a hundred games, so
+# the panel can poll it and only pay for a full rescan when something has
+# actually changed.
+#
+# Thumbnails are deliberately absent: art for an existing game appears only
+# when RetroArch downloads it, which changes no file a scan reads, and the
+# periodic rescan picks it up anyway. Walking tens of thousands of thumbnail
+# files every poll was the dominant cold-cache cost.
 #
 # Polled rather than watched with inotify deliberately: inotify-tools is not
 # guaranteed to be installed, a recursive watch on a large tree can exhaust
@@ -350,7 +386,6 @@ fingerprint() {
     find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$INFO_DIR" -maxdepth 1 -type f -name '*.info' -printf '%T@\t%s\t%p\n' 2>/dev/null
-    find "$THUMBNAIL_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
     [[ -f $CORES_CONF ]] && { printf 'cores.conf\t'; cat "$CORES_CONF"; }
   } | sort | cksum | tr -d ' \n'
   printf '\n'
@@ -374,13 +409,12 @@ Prints the Arcade game library as JSON on stdout:
                  milliseconds, so it is cheap to poll.
 
 Environment:
-  ARCADE_ROM_DIR   Override the ROM directory (default: RetroArch's
-                   rgui_browser_directory, or ~/Games/roms)
   RA_CONFIG_DIR    Override the RetroArch config directory
 
 Config:
-  ~/.config/omarchy/arcade/cores.conf   One "ext = core" per line, to map
-                                        extensions this scanner leaves alone.
+  ~/.config/omarchy/arcade/cores.conf   One "ext = core" per line, choosing
+                                        which installed core opens extensions
+                                        that more than one core claims.
 USAGE
     exit 0
     ;;

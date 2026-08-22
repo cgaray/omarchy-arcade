@@ -49,10 +49,11 @@ done
 check "the overlay dismisses itself through the shell host" \
   "true" "$(grep -q 'shell.hide(root.pluginId)' "$ROOT/$OVERLAY" && echo true || echo false)"
 
-# Both surfaces spawn the same helpers by path.
+# Both surfaces reach the same helpers: the launcher from each surface
+# directly, the scanner through the shared ArcadeLibrary component.
 for script in omarchy-arcade-scan omarchy-arcade-launch; do
   check "$script is referenced by the overlay" \
-    "true" "$(grep -qF "$script" "$ROOT/$OVERLAY" && echo true || echo false)"
+    "true" "$(grep -qF "$script" "$ROOT/$OVERLAY" "$ROOT/ArcadeLibrary.qml" && echo true || echo false)"
 done
 
 # Check the widget display name.
@@ -86,10 +87,12 @@ if grep -qE '^\s*manageIpc: false' "$PANEL"; then
     "1" "$(grep -cE "^\s*target: \"$(jq -r .id "$MANIFEST")\"" "$PANEL")"
 fi
 
-# Check helper paths and permissions.
+# Check helper paths and permissions. The scanner is spawned by the shared
+# ArcadeLibrary component, which both surfaces instantiate; the launcher is
+# referenced from each surface directly.
 for script in omarchy-arcade-scan omarchy-arcade-launch; do
   check "$script is referenced by the panel" \
-    "true" "$(grep -qF "$script" "$PANEL" && echo true || echo false)"
+    "true" "$(grep -qF "$script" "$PANEL" "$ROOT/ArcadeLibrary.qml" && echo true || echo false)"
   check "$script is executable" \
     "true" "$([[ -x $ROOT/bin/$script ]] && echo true || echo false)"
 done

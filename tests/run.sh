@@ -37,13 +37,16 @@ done
 # covers that file instead.
 if command -v qmllint >/dev/null; then
   step "qmllint Library.js" qmllint "$ROOT/Library.js"
-  step "qmllint Overlay.qml" qmllint -I /usr/share/omarchy/shell "$ROOT/Overlay.qml"
+  for qml in Overlay.qml ArcadeLibrary.qml PanelFooter.qml ScrollRail.qml SortPicker.qml ShortcutHelp.qml PanelFooter.qml KeyHintBar.qml GameTile.qml InspectorCard.qml ContinueRow.qml LibraryRow.qml; do
+    step "qmllint $qml" qmllint -I /usr/share/omarchy/shell "$ROOT/$qml"
+  done
 else
   echo "── qmllint (skipped: not installed)"
 fi
 
 step "bar-widget contract" bash "$HERE/panel-contract-test.sh"
 step "qml root references" node "$HERE/qml-refs-test.js" "$ROOT/Panel.qml" "$ROOT/Overlay.qml"
+step "architecture seam" node "$HERE/seam-test.js"
 step "library unit tests" node "$HERE/library-test.js"
 step "session unit tests" node "$HERE/session-test.js"
 step "launcher integration tests" bash "$HERE/launch-test.sh"

@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.cgaray.arcade",
   "name": "Arcade",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "Christopher Garay",
   "license": "MIT",
-  "description": "Your games in the Omarchy bar, each one showing the frame you paused on \u2014 plus a fullscreen cover-art grid for browsing the whole library.",
+  "description": "Your retro games in the Omarchy bar, each one showing the frame you paused on \u2014 plus a fullscreen cover-art grid for browsing the whole library.",
   "kinds": [
     "bar-widget",
     "overlay"
@@ -54,7 +54,7 @@
         "max": 500,
         "step": 10,
         "defaultValue": 40,
-        "description": "Caps rendered rows. Search still looks through the whole library."
+        "description": "Caps rendered rows in the bar panel. Search still looks through the whole library."
       },
       {
         "key": "silenceNotifications",

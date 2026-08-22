@@ -135,9 +135,10 @@ set_choice() {
   [[ -f $CORES_CONF ]] || printf '# Which core opens which extension. Written by Arcade.\n' >"$CORES_CONF"
 
   # Rewrite through a temp file so an interrupted write cannot truncate the
-  # user's other choices.
+  # user's other choices. The temp file lives beside CORES_CONF so the final
+  # mv is an atomic rename rather than a cross-filesystem copy.
   local tmp
-  tmp=$(mktemp) || die "could not create temp file"
+  tmp=$(mktemp "$(dirname "$CORES_CONF")/.cores-XXXXXX") || die "could not create temp file"
   grep -vE "^[[:space:]]*${ext}[[:space:]]*=" "$CORES_CONF" >"$tmp" 2>/dev/null
   printf '%s = %s\n' "$ext" "$core" >>"$tmp"
   mv -f "$tmp" "$CORES_CONF"
@@ -149,7 +150,7 @@ unset_choice() {
   ext="$(tr '[:upper:]' '[:lower:]' <<<"$ext")"
   [[ -f $CORES_CONF ]] || { echo "ok"; return; }
   local tmp
-  tmp=$(mktemp) || die "could not create temp file"
+  tmp=$(mktemp "$(dirname "$CORES_CONF")/.cores-XXXXXX") || die "could not create temp file"
   grep -vE "^[[:space:]]*${ext}[[:space:]]*=" "$CORES_CONF" >"$tmp" 2>/dev/null
   mv -f "$tmp" "$CORES_CONF"
   echo "ok"

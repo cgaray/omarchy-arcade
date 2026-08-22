@@ -4,7 +4,6 @@ import Quickshell.Wayland
 import QtQuick
 import qs.Commons
 import qs.Ui
-import "Library.js" as Library
 import "ArcadeSession.js" as Session
 
 // The browsing half of Arcade. The bar popup is for picking up where you left
@@ -37,19 +36,43 @@ Item {
   property var sessionSettings: ({})
   property bool helpOpen: false
   property bool savedOnly: false
+  property string sortMode: "name"
 
   property var games: []
   property var extensions: []
-  property var scanMeta: ({})
   property var visibleGames: []
   property string loadError: ""
-  property bool scanning: false
   property double nowSeconds: 0
 
-  readonly property bool retroarchMissing: scanMeta.retroarchInstalled === false
-  readonly property var systems: Library.systemsOf(root.savedOnly
-    ? root.games.filter(function (game) { return game.resumeAt > 0 })
-    : root.games)
+
+  readonly property bool retroarchMissing: lib.retroarchMissing
+
+  // The hint bar follows the mode: only the keys that work right now are
+  // worth showing.
+  readonly property var footerHints: {
+    if (helpOpen)
+      return [{ key: "?", label: "close help" }, { key: "esc", label: "back" }]
+    if (retroarchMissing || (games.length === 0 && !lib.scanning))
+      return [{ key: "F5", label: "rescan" }, { key: "esc", label: "back" }]
+    if (filterText.length > 0)
+      return [
+        { key: "⌫", label: "erase" },
+        { key: "ctrl+⌫", label: "clear filter" },
+        { key: "⏎", label: "resume" },
+        { key: "?", label: "shortcuts" }
+      ]
+    return [
+      { key: "←↑↓→", label: "move" },
+      { key: "⏎", label: "resume" },
+      { key: "⇧⏎", label: "start over" },
+      { key: "ctrl+s", label: "saved only" },
+      { key: "⇥", label: "next system" },
+      { key: "⇧⇥", label: "previous system" },
+      { key: "?", label: "shortcuts" }
+    ]
+  }
+
+  property var systems: []
   readonly property var selectedGame:
     root.visibleGames.length > root.selectedIndex ? root.visibleGames[root.selectedIndex] : null
 
@@ -61,15 +84,16 @@ Item {
   property color accent: Color.accent
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color dim: Util.alpha(foreground, 0.62)
   readonly property int cornerRadius: Style.cornerRadius
   property string fontFamily: Style.font.menuFamily
   property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
 
   readonly property int contentMargin: Style.spacing.panelPadding
-  readonly property int tileWidth: Style.space(216)
-  readonly property int tileHeight: Style.space(212)
-  readonly property int artHeight: Style.space(142)
+  readonly property int gridColumnCount: card.width >= 1600 ? 7 : (card.width >= 1200 ? 6 : 5)
+  readonly property int tileWidth: Math.max(Style.space(190), Math.floor((card.width - contentMargin * 2 - Style.space(8)) / gridColumnCount))
+  readonly property int artHeight: Math.round(tileWidth * 0.68)
+  readonly property int tileHeight: artHeight + Style.space(84)
 
   // --- lifecycle -------------------------------------------------------------
 
@@ -107,26 +131,14 @@ Item {
 
   function refresh() {
     root.nowSeconds = Date.now() / 1000
-    root.scanning = true
-    scanProcess.running = false
-    scanProcess.running = true
-  }
-
-  function applyScan(raw) {
-    root.scanning = false
-    root.lastFingerprint = ""
-    var parsed = Session.parseScan(raw)
-    root.loadError = parsed.error
-    root.games = parsed.games
-    root.extensions = parsed.extensions
-    root.scanMeta = parsed.meta
-    root.rebuild()
+    lib.refresh()
   }
 
   function rebuild() {
-    var derived = Session.rebuild(root.games, root.filterText, root.systemFilter, 2000, 0, root.savedOnly)
+    var derived = Session.rebuild(root.games, root.filterText, root.systemFilter, 2000, 0, root.savedOnly, root.sortMode)
     root.systemFilter = derived.systemFilter
     root.visibleGames = derived.libraryRows
+    root.systems = derived.systems
     if (root.selectedIndex >= root.visibleGames.length)
       root.selectedIndex = Math.max(0, root.visibleGames.length - 1)
     if (root.selectedIndex < 0) root.selectedIndex = 0
@@ -146,6 +158,13 @@ Item {
     root.savedOnly = next
     root.selectedIndex = 0
     root.rebuild()
+  }
+
+  function setSort(mode) {
+    root.sortMode = mode
+    root.selectedIndex = 0
+    root.rebuild()
+    Qt.callLater(function () { grid.positionViewAtBeginning() })
   }
 
   function setSystem(system) {
@@ -222,46 +241,19 @@ Item {
   }
 
 
-  // --- Watching for new ROMs --------------------------------------------------
-  // A full scan costs a second or two on a large library, which is far too
-  // much to run on a short timer. The scanner's --fingerprint mode costs
-  // milliseconds, so poll that and only pay for a rescan when it moves.
-  // Catches ROMs added or removed, new save states, playlist imports, and
-  // core choices made elsewhere.
-  property string lastFingerprint: ""
-
-  Process {
-    id: watchProcess
-    command: [root.pluginDir + "/bin/omarchy-arcade-scan", "--fingerprint"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var next = String(text || "").trim()
-        if (!next.length) return
-        // The first reading establishes a baseline rather than counting as a
-        // change, so opening the panel does not immediately rescan twice.
-        if (root.lastFingerprint === "") { root.lastFingerprint = next; return }
-        if (!Session.fingerprintChanged(root.lastFingerprint, next)) return
-        root.lastFingerprint = next
-        root.refresh()
-      }
-    }
-  }
-
-  Timer {
-    // Only while the grid is on screen: a closed overlay has no one to tell.
-    interval: Math.max(2, 10) * 1000
-    running: root.opened
-    repeat: true
-    onTriggered: if (!watchProcess.running && !root.scanning) watchProcess.running = true
-  }
-
-  Process {
-    id: scanProcess
-    command: [root.pluginDir + "/bin/omarchy-arcade-scan"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.applyScan(text)
+  // The library feed, shared with the panel. This surface owns the policy:
+  // poll only while the grid is on screen, since a closed overlay has no one
+  // to tell.
+  ArcadeLibrary {
+    id: lib
+    pluginDir: root.pluginDir
+    watchActive: root.opened
+    watchIntervalSec: 10
+    onChanged: {
+      root.games = lib.games
+      root.extensions = lib.extensions
+      root.loadError = lib.loadError
+      root.rebuild()
     }
   }
 
@@ -274,6 +266,7 @@ Item {
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
+
 
     Rectangle {
       anchors.fill: parent
@@ -308,6 +301,15 @@ Item {
 
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function (event) {
+          // Foreground layers get first refusal, matching Omarchy's menu and
+          // confirmation dialogs. Nothing should move behind the help card.
+          if (root.helpOpen) {
+            if (event.key === Qt.Key_Escape || event.text === "?")
+              root.helpOpen = false
+            event.accepted = true
+            return
+          }
+
           var systemSlot = root.systemShortcut(event)
           if (systemSlot >= 0) {
             root.jumpSystem(systemSlot)
@@ -318,8 +320,9 @@ Item {
             else if (root.savedOnly) root.setSavedOnly(false)
             else root.dismiss()
             event.accepted = true
-          } else if (event.key === Qt.Key_Tab) {
-            root.cycleSystem((event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+          } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+            // With Shift held, Qt reports Backtab rather than Tab+Shift.
+            root.cycleSystem((event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier)) ? -1 : 1)
             event.accepted = true
           } else if (event.key === Qt.Key_F5) {
             root.refresh()
@@ -402,7 +405,7 @@ Item {
             Text {
               anchors.verticalCenter: parent.verticalCenter
               text: "󰊴"
-              color: root.foreground
+              color: root.accent
               font.family: root.fontFamily
               font.pixelSize: Style.font.displayLarge
             }
@@ -415,15 +418,15 @@ Item {
                 text: "Arcade"
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.heading
+                font.pixelSize: Style.font.title
               }
 
               Text {
                 text: {
-                  if (root.retroarchMissing) return "RetroArch is not installed"
-                  if (root.loadError) return root.loadError
-                  if (root.scanning && root.games.length === 0) return "Scanning…"
-                  if (root.scanning) return "Refreshing library…"
+                  if (lib.retroarchMissing) return "RetroArch is not installed"
+                  if (lib.loadError) return lib.loadError
+                  if (lib.scanning && root.games.length === 0) return "Scanning…"
+                  if (lib.scanning) return "Refreshing library…"
                   return root.visibleGames.length
                     + (root.visibleGames.length === 1 ? " game" : " games")
                     + (root.systemFilter ? " · " + root.systemFilter : "")
@@ -443,7 +446,7 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: Style.space(2)
-            visible: root.scanning
+            visible: lib.scanning
             color: Util.alpha(root.accent, 0.18)
             clip: true
 
@@ -458,7 +461,7 @@ Item {
                 to: scanTrack.width
                 duration: 900
                 loops: Animation.Infinite
-                running: root.scanning
+                running: lib.scanning
               }
             }
           }
@@ -472,7 +475,7 @@ Item {
             text: root.filterText ? root.filterText : "Type to search"
             color: root.filterText ? root.foreground : root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.heading
+            font.pixelSize: Style.font.title
             horizontalAlignment: Text.AlignRight
             elide: Text.ElideLeft
           }
@@ -481,7 +484,7 @@ Item {
         // --- Systems -----------------------------------------------------------
         Flickable {
           width: parent.width
-          visible: root.systems.length > 1 && !root.retroarchMissing
+          visible: root.systems.length > 1 && !lib.retroarchMissing
           height: visible ? systemRow.implicitHeight : 0
           contentWidth: systemRow.implicitWidth
           contentHeight: height
@@ -500,7 +503,7 @@ Item {
               foreground: root.foreground
               accent: root.accent
               fontFamily: root.fontFamily
-              fontSize: Style.font.caption
+              fontSize: Style.font.bodySmall
               onClicked: root.setSystem("")
             }
 
@@ -514,10 +517,26 @@ Item {
                 foreground: root.foreground
                 accent: root.accent
                 fontFamily: root.fontFamily
-                fontSize: Style.font.caption
+                fontSize: Style.font.bodySmall
                 onClicked: root.setSystem(modelData.system)
               }
             }
+          }
+        }
+
+        Item {
+          width: parent.width
+          height: Style.space(32)
+
+          SortPicker {
+            id: sortPicker
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            selectedMode: root.sortMode
+            foreground: root.foreground
+            accent: root.accent
+            fontFamily: root.fontFamily
+            onChosen: function (mode) { root.setSort(mode) }
           }
         }
 
@@ -526,90 +545,20 @@ Item {
         Item {
           id: inspector
           width: parent.width
-          height: root.selectedGame ? Style.space(92) : 0
+          height: root.selectedGame ? Style.space(116) : 0
           visible: root.selectedGame !== null
           clip: true
 
-          Rectangle {
+          InspectorCard {
             anchors.fill: parent
-            radius: root.cornerRadius
-            color: root.selectedBackground
-            border.width: Math.max(1, Style.space(1))
-            border.color: root.accent
-
-            Row {
-              anchors.fill: parent
-              anchors.margins: Style.space(10)
-              spacing: Style.space(12)
-
-              Rectangle {
-                width: Style.space(100)
-                height: parent.height
-                radius: root.cornerRadius
-                color: Util.alpha(root.foreground, 0.08)
-                clip: true
-
-                Image {
-                  id: inspectorArt
-                  anchors.fill: parent
-                  source: root.selectedGame ? Util.fileUrl(root.selectedGame.art) : ""
-                  fillMode: Image.PreserveAspectCrop
-                  asynchronous: true
-                  visible: status === Image.Ready
-                }
-
-                Text {
-                  anchors.centerIn: parent
-                  visible: inspectorArt.status !== Image.Ready
-                  text: "󰊴"
-                  color: root.foreground
-                  opacity: 0.28
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.displayLarge
-                }
-              }
-
-              Column {
-                anchors.verticalCenter: parent.verticalCenter
-                width: parent.width - Style.space(112)
-                spacing: Style.space(3)
-
-                Text {
-                  width: parent.width
-                  text: root.selectedGame ? root.selectedGame.title : ""
-                  color: root.selectedText
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.heading
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  width: parent.width
-                  text: root.selectedGame ? Library.systemAndCore(root.selectedGame) : ""
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  width: parent.width
-                  text: {
-                    if (!root.selectedGame) return ""
-                    var g = root.selectedGame
-                    var bits = []
-                    var summary = Library.playSummary(g, root.nowSeconds)
-                    if (summary) bits.push(summary)
-                    if (g.resumeAt > 0) bits.push("Enter resumes")
-                    return bits.join(" · ")
-                  }
-                  color: root.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                }
-              }
-            }
+            game: root.selectedGame
+            nowSeconds: root.nowSeconds
+            foreground: root.foreground
+            accent: root.accent
+            selectedBackground: root.selectedBackground
+            selectedText: root.selectedText
+            fontFamily: root.fontFamily
+            cornerRadius: root.cornerRadius
           }
         }
 
@@ -621,6 +570,7 @@ Item {
           GridView {
             id: grid
             anchors.fill: parent
+            anchors.rightMargin: Style.space(8)
             model: root.visibleGames
             clip: true
             cellWidth: root.tileWidth
@@ -629,119 +579,61 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             visible: root.visibleGames.length > 0
 
-            delegate: Item {
-              id: tile
+            // Filtering reshuffles the wall; a short fade makes that read as
+            // the shelf rearranging itself rather than a hard cut.
+            populate: Transition {
+              NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 170; easing.type: Easing.OutCubic }
+            }
+            add: Transition {
+              NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 170; easing.type: Easing.OutCubic }
+            }
+            displaced: Transition {
+              NumberAnimation { property: "y"; duration: 120; easing.type: Easing.OutCubic }
+            }
+
+            // No grouped sections here: Quattro's GridView rejects them
+            // (first-party code only sections ListViews). Session still
+            // orders browse-mode rows by system, so each wall clusters
+            // cleanly under the header count line.
+
+            delegate: GameTile {
               required property int index
               required property var modelData
-              readonly property var game: modelData || null
-              readonly property bool hasCursor: root.cursorActive && index === root.selectedIndex
 
               width: root.tileWidth
               height: root.tileHeight
+              game: modelData || null
+              hasCursor: root.cursorActive && index === root.selectedIndex
+              filterText: root.filterText
+              foreground: root.foreground
+              dim: root.dim
+              accent: root.accent
+              selectedBackground: root.selectedBackground
+              selectedText: root.selectedText
+              background: root.background
+              fontFamily: root.fontFamily
+              cornerRadius: root.cornerRadius
+              artHeight: root.artHeight
 
-              Rectangle {
-                anchors.fill: parent
-                anchors.margins: Style.space(6)
-                radius: root.cornerRadius
-                color: tile.hasCursor ? root.selectedBackground
-                                      : (tileHover.containsMouse ? Style.hoverFill : "transparent")
-                border.width: tile.hasCursor ? Math.max(1, Style.space(2)) : 0
-                border.color: root.accent
-
-                Column {
-                  anchors.fill: parent
-                  anchors.margins: Style.space(8)
-                  spacing: Style.space(6)
-
-                  Rectangle {
-                    width: parent.width
-                    height: root.artHeight
-                    radius: root.cornerRadius
-                    color: Util.alpha(root.foreground, 0.08)
-                    clip: true
-
-                    Image {
-                      id: cover
-                      anchors.fill: parent
-                      anchors.margins: Style.space(2)
-                      source: tile.game ? Util.fileUrl(tile.game.art) : ""
-                      fillMode: Image.PreserveAspectFit
-                      asynchronous: true
-                      visible: status === Image.Ready
-                    }
-
-                    // Most libraries have art for some games and not others,
-                    // so the fallback has to be a design rather than a hole.
-                    Text {
-                      anchors.centerIn: parent
-                      visible: cover.status !== Image.Ready
-                      text: "󰊴"
-                      color: root.foreground
-                      opacity: 0.28
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.displayLarge
-                    }
-
-                    // A save to come back to, said once and quietly.
-                    Rectangle {
-                      anchors.top: parent.top
-                      anchors.right: parent.right
-                      anchors.margins: Style.space(6)
-                      visible: tile.game !== null && tile.game.resumeAt > 0
-                      width: resumeBadge.implicitWidth + Style.space(10)
-                      height: resumeBadge.implicitHeight + Style.space(4)
-                      radius: height / 2
-                      color: root.accent
-
-                      Text {
-                        id: resumeBadge
-                        anchors.centerIn: parent
-                        text: "RESUME"
-                        color: root.background
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                      }
-                    }
-                  }
-
-                  Text {
-                    width: parent.width
-                    text: tile.game ? tile.game.title : ""
-                    textFormat: Text.PlainText
-                    color: tile.hasCursor ? root.selectedText : root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    elide: Text.ElideRight
-                  }
-
-                  Text {
-                    width: parent.width
-                    text: tile.game ? Library.systemAndCore(tile.game) : ""
-                    textFormat: Text.PlainText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                  }
-                }
-
-                MouseArea {
-                  id: tileHover
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  acceptedButtons: Qt.LeftButton | Qt.RightButton
-                  onContainsMouseChanged: if (containsMouse) {
-                    root.cursorActive = true
-                    root.selectedIndex = tile.index
-                  }
-                  onClicked: function (mouse) {
-                    root.selectedIndex = tile.index
-                    root.launch(tile.game, mouse.button !== Qt.RightButton)
-                  }
-                }
+              onHovered: {
+                root.cursorActive = true
+                root.selectedIndex = index
+              }
+              onActivated: function (resume) {
+                root.launch(modelData, resume)
               }
             }
+          }
+
+          ScrollRail {
+            anchors {
+              top: parent.top
+              bottom: parent.bottom
+              right: parent.right
+            }
+            view: grid
+            foreground: root.foreground
+            accent: root.accent
           }
 
           // --- Empty states -----------------------------------------------------
@@ -749,7 +641,7 @@ Item {
             anchors.centerIn: parent
             width: Math.min(parent.width, Style.space(520))
             spacing: Style.space(10)
-            visible: root.visibleGames.length === 0 && !root.scanning
+            visible: root.visibleGames.length === 0 && !lib.scanning
 
             Text {
               width: parent.width
@@ -768,8 +660,8 @@ Item {
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
               text: {
-                if (root.retroarchMissing) return "RetroArch is not installed"
-                if (root.loadError) return root.loadError
+                if (lib.retroarchMissing) return "RetroArch is not installed"
+                if (lib.loadError) return lib.loadError
                 if (root.filterText) return "No games match “" + root.filterText + "”"
                 return "No games yet"
               }
@@ -777,7 +669,7 @@ Item {
 
             Button {
               anchors.horizontalCenter: parent.horizontalCenter
-              visible: root.retroarchMissing
+              visible: lib.retroarchMissing
               text: "Install RetroArch"
               iconText: "󰇚"
               bordered: true
@@ -797,7 +689,7 @@ Item {
               width: parent.width
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.WordWrap
-              visible: !root.filterText && !root.loadError && !root.retroarchMissing
+              visible: !root.filterText && !lib.loadError && !lib.retroarchMissing
               text: "Drop ROMs into ~/Games/roms, or scan them in RetroArch, then press F5."
               color: root.dim
               font.family: root.fontFamily
@@ -807,7 +699,7 @@ Item {
 
           Text {
             anchors.centerIn: parent
-            visible: root.scanning && root.games.length === 0
+            visible: lib.scanning && root.games.length === 0
             text: "Scanning…"
             color: root.dim
             font.family: root.fontFamily
@@ -816,52 +708,36 @@ Item {
         }
 
         // --- Footer --------------------------------------------------------------
-        Text {
+        Item {
           id: footer
           width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          text: "↑↓←→ / hjkl move   ⏎ resume   ⇧⏎ fresh   Ctrl+S saves   ⇥ system   ? help"
-          color: root.dim
-          opacity: 0.8
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
+          height: footerHintsRow.implicitHeight
+
+          KeyHintBar {
+            id: footerHintsRow
+            width: parent.width
+            anchors.verticalCenter: parent.verticalCenter
+            hints: root.footerHints
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+          }
         }
 
       }
 
-      BorderSurface {
+      ShortcutHelp {
         visible: root.helpOpen
         z: 20
         width: Math.min(parent.width, Style.space(760))
-        height: helpContent.implicitHeight + Style.space(24)
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        color: root.background
+        background: root.background
+        foreground: root.foreground
+        dim: root.dim
         borderSpec: root.borderSpec
-        radius: root.cornerRadius
-
-        Column {
-          id: helpContent
-          anchors.fill: parent
-          anchors.margins: Style.space(12)
-          spacing: Style.space(6)
-
-          Text {
-            text: "Keyboard shortcuts"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-          }
-
-          Text {
-            width: parent.width
-            text: "↑↓←→ or hjkl move    Enter resume    Shift+Enter fresh    type search\nCtrl+S saved states    Tab / Shift+Tab systems    Ctrl+0 all, Ctrl+1..9 jump system    F5 refresh    Ctrl+Backspace clear    Esc back"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-        }
+        fontFamily: root.fontFamily
+        cornerRadius: root.cornerRadius
       }
     }
   }

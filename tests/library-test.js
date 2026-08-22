@@ -43,6 +43,7 @@ const game = (over) =>
       resumeSlot: "",
       resumeArt: "",
       resumeAt: 0,
+      addedAt: 0,
       lastPlayed: 0,
       playSeconds: 0,
       playCount: 0
@@ -83,6 +84,11 @@ test("parseLibrary keeps resumeSlot 0 distinguishable from no slot", () => {
   const g = Library.parseLibrary(raw).games[0]
   assert.strictEqual(g.resumeSlot, "0")
   assert.strictEqual(g.resumeAt, 100)
+})
+
+test("parseLibrary keeps the persisted first-discovered timestamp", () => {
+  const raw = JSON.stringify({ games: [game({ addedAt: 1234 })] })
+  assert.strictEqual(Library.parseLibrary(raw).games[0].addedAt, 1234)
 })
 
 // --- filterGames ------------------------------------------------------------
@@ -398,6 +404,23 @@ test("formatAgo renders each bucket", () => {
 test("formatAgo renders nothing for a game that was never resumed", () => {
   assert.strictEqual(Library.formatAgo(0, 1_750_000_000), "")
   assert.strictEqual(Library.formatAgo(-5, 1_750_000_000), "")
+})
+
+test("highlightTitle escapes and accents the matched run", () => {
+  assert.strictEqual(Library.highlightTitle("A&B", "", "#f00"), "A&amp;B")
+  assert.strictEqual(
+    Library.highlightTitle("Abc", "ab", "#f00"),
+    '<b><font color="#f00">Ab</font></b>c')
+  // Greedy left-to-right, same as subsequenceScore.
+  assert.strictEqual(
+    Library.highlightTitle("abc", "ac", "#f00"),
+    '<b><font color="#f00">a</font></b>b<b><font color="#f00">c</font></b>')
+  // No full match: plain escaped title, no tags.
+  assert.strictEqual(Library.highlightTitle("Abc", "zz", "#f00"), "Abc")
+  // Escaping happens inside the match too, and adjacent hits form one run.
+  assert.strictEqual(
+    Library.highlightTitle("<b>x", "<b", "#0f0"),
+    '<b><font color="#0f0">&lt;b</font></b>&gt;x')
 })
 
 console.log(`library-test: ${passed} passed`)

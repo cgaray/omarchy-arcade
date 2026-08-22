@@ -5,19 +5,32 @@
 - Run `./tests/run.sh` before considering a change complete. It is the CI entrypoint and requires `node`, `jq`, and Bash; `qmllint` is optional.
 - Use `node tests/library-test.js` for `Library.js` changes and `bash tests/scan-test.sh` for scanner changes. The scanner test uses isolated RetroArch/core fixtures and does not touch the user's configuration.
 - Run `bash -n bin/<script>` for a focused shell syntax check. Keep `bin/omarchy-arcade-*` executable.
-- `qmllint` can validate `Overlay.qml` and `Library.js` when installed, but cannot resolve the `qs.Ui.Panel` root in `Panel.qml`; `tests/panel-contract-test.sh` and `tests/qml-refs-test.js` cover the panel's runtime contract and undeclared `root.*` references.
+- `qmllint` validates `Library.js`, `Overlay.qml`, `ArcadeLibrary.qml`, and every delegate file against the shell's type information; it cannot resolve the `qs.Ui.Panel` root in `Panel.qml`. `tests/panel-contract-test.sh` and `tests/qml-refs-test.js` cover the panel's runtime contract and undeclared `root.*` references, and `tests/seam-test.js` enforces the module map and surface size caps.
 
 ## Architecture
 
+- Module map, enforced by `tests/seam-test.js`: QML views (`Panel.qml`, `Overlay.qml`, delegate files) import only `ArcadeSession.js`; `ArcadeSession.js` imports `Library.js`; `Library.js` imports nothing. Never call `Library.*` from QML.
 - `Panel.qml` and `Overlay.qml` are separate shell entrypoints and object trees. They share disk state through `omarchy-arcade-scan`, `cores.conf`, and save states, not runtime QML state.
+- `ArcadeLibrary.qml` is the shared library feed (scan process, fingerprint polling, parsing). Both surfaces instantiate it and own their own policy: the panel watches always, the overlay only while open. Scan fixes land in one place.
+- Row/tile presentation lives in its own files (`ContinueRow.qml`, `LibraryRow.qml`, `GameTile.qml`, `InspectorCard.qml`, `KeyHintBar.qml`): props in, signals out, no data access, no launching. Keep it that way so qmllint can check them.
 - `Library.js` must remain plain ES5-compatible, free of QML/Quickshell imports, and export its functions for Node tests. QML-only pragmas are stripped by `tests/library-test.js`.
 - `ArcadeSession.js` is the pure orchestration seam shared by both QML surfaces; keep process/timer objects and navigation in QML, and keep session functions Node-testable.
-- `bin/omarchy-arcade-scan` reads RetroArch playlists and emits one JSON document; playlist metadata is the library source.
-- `bin/omarchy-arcade-launch` owns RetroArch invocation, desktop-state suppression/restoration, and playtime persistence. Preserve its `trap`-based restoration on normal exit, failure, and signals.
+- `bin/omarchy-arcade-scan` reads RetroArch playlists and emits one JSON document; playlist metadata is the library source. It forks jq once per playlist, streaming NUL-delimited fields, and its helpers return results through variables (`CORE_PATH`, `EXT`, `BOXART`, `STATE_INFO`) instead of stdout. Do not reintroduce per-ROM process spawns or `$( )` captures of these helpers: they cost ~7ms each and turned a 400-game scan from 150ms into seconds.
+- The scanner's `--fingerprint` intentionally excludes the thumbnail tree: art appearing for an existing game changes no file a scan reads, and the periodic rescan picks it up. Re-adding that walk re-creates the dominant cold-cache poll cost.
+- `bin/omarchy-arcade-launch` owns RetroArch invocation, desktop-state suppression/restoration, and playtime persistence. RetroArch runs in the background; INT/TERM are forwarded to it and restoration happens only after it exits, so a session shutdown cannot unsilence notifications under a live game. Its exit status propagates. Preserve that ordering and the trap-based restoration on normal exit, failure, and signals.
+- Atomic writes (plays.json, added.json, cores.conf) go through a temp file created in the destination directory, so the final `mv` is an atomic rename. A `/tmp` tempfile makes it a cross-filesystem copy, which is exactly the truncation risk the pattern exists to prevent.
 - QML process commands use absolute paths. Plugin helpers resolve from `pluginDir`; Omarchy commands resolve from `$OMARCHY_PATH/bin` because detached processes do not inherit a login shell `PATH`.
-- When changing scan or launch behavior, update both QML surfaces or deliberately centralize the shared behavior; launch settings must stay consistent across surfaces.
+- When changing launch behavior, update both QML surfaces or move it into `ArcadeSession.launchRequest`; launch settings must stay consistent across surfaces.
 
 ## Runtime Fixtures
 
 - Scanner behavior depends on `RA_CONFIG_DIR`, `XDG_STATE_HOME`, and `XDG_CONFIG_HOME`; use these variables with temporary directories for focused manual checks.
 - The scanner requires `jq`. Playlist entries without an installed core should be skipped.
+
+## Running Locally
+
+- Marketplace rule: plugin folders must contain real files — no symlinks (folder or file level). The install is a real directory; after editing the repo run `./dev-sync.sh` to rsync it into `~/.config/omarchy/plugins/io.github.cgaray.arcade`, then `omarchy-restart-shell` (or `omarchy-shell shell rescanPlugins`) and confirm via the journal (`journalctl --user -t omarchy-shell`)."
+- Quattro's GridView rejects grouped `section.*` assignments (first-party code only sections ListViews). Do not re-add section headers to the overlay grid without an upstream check.
+- Drive it over IPC: `omarchy-shell io.github.cgaray.arcade toggle|refresh|status`, or summon the overlay with `omarchy-shell shell summon io.github.cgaray.arcade '{}'`.
+- For a clean slate use `omarchy-restart-shell` (lock-safe, respawns via Hyprland). IPC can report "not responding" for a second during reload churn; retry rather than restarting.
+- Shell logs land in the journal under the `omarchy-shell` tag: `journalctl --user -t omarchy-shell`. Plugin QML errors appear there.

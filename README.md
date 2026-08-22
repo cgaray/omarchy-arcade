@@ -23,7 +23,8 @@ decide to play — and around the desktop you are playing on top of.
   each showing the actual frame RetroArch captured when you saved. `Enter`
   resumes it. `f` starts the same game fresh.
 - **Notifications go quiet** for the length of the game and come back after —
-  including when the emulator crashes, because the restore runs from a trap.
+  including when the emulator crashes or is killed, because the restore waits
+  for RetroArch to actually exit.
 - **The screensaver stays away** during long cutscenes, then your idle setting
   is put back.
 - **It restores what it found.** If you were already in do-not-disturb before
@@ -66,7 +67,9 @@ Optionally bind them. In `~/.config/hypr/bindings.conf`:
 
 ```
 bindd = SUPER, G, Arcade, exec, omarchy-shell io.github.cgaray.arcade toggle
-bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell summon io.github.cgaray.arcade '{}'
+# Toggle the fullscreen library: opens it, or dismisses it when already up --
+# so the hotkey never reaches the window behind the overlay.
+bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell toggle io.github.cgaray.arcade '{}'
 ```
 
 ## Your library
@@ -83,15 +86,23 @@ mode that signs the ROM tree in a few milliseconds, so the panel checks that
 every ten seconds and only pays for a full rescan when it moves. That avoids
 depending on `inotify-tools`, avoids exhausting the kernel's watch limit on a
 large tree, and leaves no monitor process to keep alive across a shell
-restart.
+restart. Rescans themselves stay cheap — one jq pass per playlist, no
+per-game process spawns — a few hundred milliseconds for a thousand games.
 
 Box art comes from RetroArch's own thumbnail cache — Arcade downloads nothing.
+Arcade records when each ROM first enters the library in
+`~/.local/state/omarchy-arcade/added.json`; removing and later re-importing a
+ROM keeps that original date.
 
 ### Browsing by system
 
 Once a library spans more than one system, a filter row appears above it:
 `All · 101`, `NES · 49`, `SNES · 52`. Click one, or press `s` to walk them.
 Systems come from the playlist.
+
+The fullscreen overlay can order the current wall by **Date added**, **Save
+date**, **Last played**, or **Name**. Date added is persistent; existing
+libraries establish their baseline on the first scan after upgrading.
 
 ## Which emulator runs a game
 
@@ -143,8 +154,14 @@ Right-click a row to start it fresh; left-click resumes. Right-clicking the
 bar icon opens the fullscreen library on whatever system you were looking at;
 middle-clicking rescans.
 
-In the overlay, arrow keys move, `Tab` walks the systems, typing filters, and
-there is no search box to reach for — the whole surface is one.
+Both surfaces show a hint bar along the bottom that follows what you are
+doing — browsing, filtering, or choosing a system — so the keys that work
+right now are always visible without opening a help screen.
+
+In the overlay, arrow keys move, `Tab` walks the systems (`Shift+Tab`
+backwards), typing filters, and there is no search box to reach for — the
+whole surface is one. `Ctrl+S` narrows to games with save states, and `?`
+shows every shortcut.
 
 ## Settings
 
@@ -155,7 +172,7 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 | `refreshIntervalSec` | 300 | Full rescan interval, as a safety net behind the watch. |
 | `watchRoms` | true | Notice new ROMs, save states, and playlist imports without waiting. |
 | `watchIntervalSec` | 10 | How often the cheap change-check runs. |
-| `maxLibraryRows` | 40 | Caps rendered rows; search still covers everything. |
+| `maxLibraryRows` | 40 | Caps rendered rows in the bar panel; search still covers everything. |
 | `silenceNotifications` | true | Do-not-disturb for the length of the game. |
 | `stayAwake` | true | Suppress idle and the lock screen while playing. |
 
@@ -163,17 +180,22 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 
 | Path | What |
 |---|---|
-| `Panel.qml` | The bar button and its popup. |
-| `Overlay.qml` | The fullscreen cover-art grid. |
+| `Panel.qml` | The bar button and its popup: state, navigation, policy. |
+| `Overlay.qml` | The fullscreen cover-art grid: state, navigation, policy. |
+| `ArcadeLibrary.qml` | The shared library feed: scanning, fingerprint polling, parsing. |
+| `ContinueRow.qml` / `LibraryRow.qml` | Panel shelf and list rows; presentation only. |
+| `GameTile.qml` / `InspectorCard.qml` | Overlay tile and detail card; presentation only. |
+| `KeyHintBar.qml` | Contextual keycap hints both surfaces show. |
 | `bin/omarchy-arcade-cores` | Reads RetroArch's core `.info` files; records core choices. |
 | `Library.js` | Filtering, ranking, Continue selection, system names. Pure, tested. |
+| `ArcadeSession.js` | The one seam the views import: rebuilds the view model, formats display strings. Pure, tested. |
 | `bin/omarchy-arcade-scan` | Builds the library as JSON; `--fingerprint` signs it cheaply. |
 | `bin/omarchy-arcade-launch` | Launches a game and holds the desktop still. |
 
 Both scripts run standalone:
 
 ```bash
- ./bin/omarchy-arcade-scan | jq '.games[0]'
+./bin/omarchy-arcade-scan | jq '.games[0]'
 ./bin/omarchy-arcade-launch --core /usr/lib/libretro/snes9x_libretro.so \
                             --rom ~/Games/roms/game.sfc --slot 0
 ```

@@ -88,7 +88,7 @@ restore_desktop() {
   refresh_indicators
   return 0
 }
-trap restore_desktop EXIT INT TERM
+trap restore_desktop EXIT
 
 capture_desktop
 apply_desktop_policy
@@ -118,13 +118,33 @@ case "$SLOT" in
 esac
 
 cleanup_cfg() { [[ -n $appendcfg && -f $appendcfg ]] && rm -f "$appendcfg"; }
-trap 'cleanup_cfg; restore_desktop' EXIT INT TERM
+restore_all() { cleanup_cfg; restore_desktop; }
+trap restore_all EXIT
+
+# A stop or Ctrl+C is meant for the game, not just for this script: hand the
+# signal on and keep waiting, so the desktop policy is only undone after
+# RetroArch has actually exited -- a session shutdown must not unsilence
+# notifications under a still-running game.
+forward_signal() {
+  [[ -n ${ra_pid:-} ]] && kill -s "$1" "$ra_pid" 2>/dev/null
+  return 0
+}
+trap 'forward_signal INT' INT
+trap 'forward_signal TERM' TERM
 
 # --- Play -------------------------------------------------------------------
 
 started=$(date +%s)
-"$RETROARCH_CMD" "${args[@]}"
+"$RETROARCH_CMD" "${args[@]}" &
+ra_pid=$!
+wait "$ra_pid"
 status=$?
+# An interrupted wait returns >128 while the child may still be running;
+# block until it is really gone so status is RetroArch's own.
+while kill -0 "$ra_pid" 2>/dev/null; do
+  wait "$ra_pid"
+  status=$?
+done
 ended=$(date +%s)
 
 record_session() {
@@ -134,7 +154,10 @@ record_session() {
   mkdir -p "$STATE_DIR"
   [[ -f $PLAYS_FILE ]] || echo '{}' >"$PLAYS_FILE"
 
-  tmp=$(mktemp -t arcade-plays-XXXXXX.json) || return 0
+  # Temp file lives beside plays.json so the final mv is a rename -- a /tmp
+  # tempfile would make this a cross-filesystem copy, which is exactly the
+  # interrupted-write truncation this dance exists to prevent.
+  tmp=$(mktemp "$STATE_DIR/.plays-XXXXXX.json") || return 0
   if jq \
     --arg key "$ROM" \
     --argjson lastPlayed "$ended" \

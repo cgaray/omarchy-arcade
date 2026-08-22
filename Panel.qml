@@ -4,7 +4,6 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
-import "Library.js" as Library
 import "ArcadeSession.js" as Session
 
 // Arcade lives in the bar because that is where you are when you decide to
@@ -38,18 +37,16 @@ Panel {
 
   property var games: []
   property var extensions: []
-  property var scanMeta: ({})
-  readonly property bool retroarchMissing: scanMeta.retroarchInstalled === false
+  property string loadError: ""
   property var continueRows: []
   property var libraryRows: []
-  property string loadError: ""
-  property bool scanning: false
   property bool playing: false
   property double nowSeconds: 0
 
   property string query: ""
   property string systemFilter: ""
-  readonly property var systems: Library.systemsOf(root.games)
+  property var systems: []
+  property int resumableTotal: 0
   // A Dropdown popup takes the keyboard while it is open; the panel's own
   // cursor keys would otherwise move the selection behind it.
   property bool dropdownOpen: false
@@ -68,8 +65,37 @@ Panel {
     return out
   }
 
+  // The hint bar follows the mode: only the keys that work right now are
+  // worth showing.
+  readonly property var footerHints: {
+    if (dropdownOpen)
+      return [{ key: "esc", label: "close" }]
+    if (focusZone === "search")
+      return [
+        { key: "esc", label: "back" },
+        { key: "⏎", label: "play first" }
+      ]
+    if (focusZone === "systems")
+      return [
+        { key: "←→", label: "choose" },
+        { key: "⏎", label: "done" },
+        { key: "↓", label: "games" }
+      ]
+    return [
+      { key: "↑↓", label: "move" },
+      { key: "←→", label: "system" },
+      { key: "⏎", label: "resume" },
+      { key: "f", label: "start over" },
+      { key: "b", label: "all games" },
+      { key: "r", label: "rescan" }
+    ]
+  }
+
   readonly property int maxLibraryRows: Math.max(10, root.setting("maxLibraryRows", 40))
   readonly property int refreshIntervalSec: Math.max(30, root.setting("refreshIntervalSec", 300))
+  // Rows on the Continue shelf. Small on purpose: it is a shelf, not a list,
+  // and the library below is right there.
+  readonly property int continueLimit: 6
 
   // Keep keyboard targets in display order.
   readonly property var cursorTargets: {
@@ -109,27 +135,16 @@ Panel {
 
   function refresh() {
     root.nowSeconds = Date.now() / 1000
-    root.scanning = true
-    scanProcess.running = false
-    scanProcess.running = true
-  }
-
-  function applyScan(raw) {
-    root.scanning = false
-    root.lastFingerprint = ""
-    var parsed = Session.parseScan(raw)
-    root.loadError = parsed.error
-    root.games = parsed.games
-    root.extensions = parsed.extensions
-    root.scanMeta = parsed.meta
-    root.rebuild()
+    lib.refresh()
   }
 
   function rebuild() {
-    var derived = Session.rebuild(root.games, root.query, root.systemFilter, root.maxLibraryRows, 6)
+    var derived = Session.rebuild(root.games, root.query, root.systemFilter, root.maxLibraryRows, root.continueLimit)
     root.systemFilter = derived.systemFilter
     root.continueRows = derived.continueRows
     root.libraryRows = derived.libraryRows
+    root.systems = derived.systems
+    root.resumableTotal = derived.resumableTotal
     if (root.cursorIndex >= root.cursorTargets.length)
       root.cursorIndex = Math.max(0, root.cursorTargets.length - 1)
   }
@@ -273,49 +288,21 @@ Panel {
     ])
   }
 
-  Process {
-    id: scanProcess
-    command: [root.pluginDir + "/bin/omarchy-arcade-scan"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.applyScan(text)
+  // The library feed: scanning, fingerprint polling, and parsing live in the
+  // shared component so both surfaces get fixes at once. This surface owns
+  // the policy -- watch always (the IPC status() counts stay current), plus
+  // a periodic rescan as a safety net behind the watch.
+  ArcadeLibrary {
+    id: lib
+    pluginDir: root.pluginDir
+    watchActive: root.setting("watchRoms", true)
+    watchIntervalSec: Math.max(2, root.setting("watchIntervalSec", 10))
+    onChanged: {
+      root.games = lib.games
+      root.extensions = lib.extensions
+      root.loadError = lib.loadError
+      root.rebuild()
     }
-  }
-
-
-  // --- Watching for new ROMs --------------------------------------------------
-  // A full scan costs a second or two on a large library, which is far too
-  // much to run on a short timer. The scanner's --fingerprint mode costs
-  // milliseconds, so poll that and only pay for a rescan when it moves.
-  // Catches ROMs added or removed, new save states, playlist imports, and
-  // core choices made elsewhere.
-  property string lastFingerprint: ""
-
-  Process {
-    id: watchProcess
-    command: [root.pluginDir + "/bin/omarchy-arcade-scan", "--fingerprint"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var next = String(text || "").trim()
-        if (!next.length) return
-        // The first reading establishes a baseline rather than counting as a
-        // change, so opening the panel does not immediately rescan twice.
-        if (root.lastFingerprint === "") { root.lastFingerprint = next; return }
-        if (!Session.fingerprintChanged(root.lastFingerprint, next)) return
-        root.lastFingerprint = next
-        root.refresh()
-      }
-    }
-  }
-
-  Timer {
-    // Runs whether or not the panel is open, so the bar count and the "to
-    // continue" tally are already right when it is opened.
-    interval: Math.max(2, root.setting("watchIntervalSec", 10)) * 1000
-    running: root.setting("watchRoms", true)
-    repeat: true
-    onTriggered: if (!watchProcess.running && !root.scanning) watchProcess.running = true
   }
 
   // The bar icon lights while a game is running, which is the one piece of
@@ -360,7 +347,7 @@ Panel {
     function status(): string {
       return JSON.stringify({
         games: root.games.length,
-        resumable: Library.resumableGames(root.games, 999).length,
+        resumable: root.resumableTotal,
         playing: root.playing
       })
     }
@@ -406,6 +393,9 @@ Panel {
           return
         }
         if (dy !== 0) root.moveCursor(dy)
+        // Sideways walks the playlist filters without leaving the list --
+        // same mental model as the overlay's system cycling.
+        else if (dx !== 0) root.cycleSystem(dx)
       }
       onActivateRequested: {
         // The chip already applied as the cursor passed over it, so Enter
@@ -431,6 +421,8 @@ Panel {
       Flickable {
         id: panelFlick
         anchors.fill: parent
+        // The pinned shortcut guide lives below the scroll area.
+        anchors.bottomMargin: pinnedFooter.visible ? pinnedFooter.height : 0
         contentWidth: width
         contentHeight: content.implicitHeight
         clip: true
@@ -448,14 +440,15 @@ Panel {
             width: parent.width
             title: "Arcade"
             meta: {
-              if (root.retroarchMissing) return "RetroArch is not installed"
-               if (root.scanning && root.games.length === 0) return "Scanning your library…"
-              if (root.loadError) return root.loadError
+              if (lib.retroarchMissing) return "RetroArch is not installed"
+               if (lib.scanning && root.games.length === 0) return "Scanning your library…"
+              if (lib.loadError) return lib.loadError
               if (root.games.length === 0) return "No games found"
               var parts = [root.games.length + (root.games.length === 1 ? " game" : " games")]
-              var resumable = Library.resumableGames(root.games, 999).length
-              if (resumable > 0) parts.push(resumable + " to continue")
-               if (root.scanning) parts.push("refreshing")
+              var resumable = root.resumableTotal
+              if (resumable === 1) parts.push("1 with a save")
+              else if (resumable > 0) parts.push(resumable + " with saves")
+               if (lib.scanning) parts.push("refreshing")
                if (root.playing) parts.push("playing now")
               return parts.join(" · ")
             }
@@ -473,33 +466,35 @@ Panel {
             }
           }
 
-          Rectangle {
-            id: scanTrack
-            width: parent.width
-            height: Style.space(2)
-            visible: root.scanning
-            color: Util.alpha(root.accent, 0.18)
-            clip: true
-
             Rectangle {
-              id: scanProgress
-              width: Math.max(Style.space(60), scanTrack.width * 0.28)
-              height: parent.height
-              color: root.accent
+              id: scanTrack
+              width: parent.width
+              height: Style.space(2)
+              visible: lib.scanning
+              color: Util.alpha(root.accent, 0.18)
+              clip: true
+              radius: height / 2
+
+              Rectangle {
+                id: scanProgress
+                width: Math.max(Style.space(60), scanTrack.width * 0.28)
+                height: parent.height
+                radius: height / 2
+                color: root.accent
 
               NumberAnimation on x {
                 from: -scanProgress.width
                 to: scanTrack.width
                 duration: 900
                 loops: Animation.Infinite
-                running: root.scanning
+                running: lib.scanning
               }
             }
           }
 
           // --- Error callout ---------------------------------------------
           BorderSurface {
-            visible: root.loadError !== ""
+            visible: lib.loadError !== ""
             width: parent.width
             implicitHeight: errorText.implicitHeight + Style.space(20)
             color: Qt.rgba(root.urgent.r, root.urgent.g, root.urgent.b, 0.10)
@@ -512,7 +507,7 @@ Panel {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               anchors.margins: Style.space(10)
-              text: root.loadError
+              text: lib.loadError
               textFormat: Text.PlainText
               color: root.urgent
               font.family: root.fontFamily
@@ -525,7 +520,7 @@ Panel {
           TextField {
             id: search
             width: parent.width
-            visible: root.games.length > 0 && !root.retroarchMissing
+            visible: root.games.length > 0 && !lib.retroarchMissing
             placeholderText: "Search games"
             text: root.query
             foreground: root.foreground
@@ -552,7 +547,7 @@ Panel {
           Flickable {
             id: systemStrip
             width: parent.width
-            visible: root.systems.length > 1 && !root.retroarchMissing
+            visible: root.systems.length > 1 && !lib.retroarchMissing
             height: visible ? systemRow.implicitHeight : 0
             contentWidth: systemRow.implicitWidth
             contentHeight: height
@@ -616,121 +611,32 @@ Panel {
               // The Continue row is the widest, tallest thing in the panel on
               // purpose: the save-state thumbnail is the reason to open this
               // at all, and shrinking it to a list icon throws that away.
-              delegate: Rectangle {
+              delegate: ContinueRow {
                 id: continueRow
                 required property int index
                 required property var modelData
-                readonly property bool hasCursor:
+                readonly property bool isSelected:
                   root.cursorActive && root.focusZone === "list"
                   && root.selectedKey() === root.targetKey("continue", modelData)
 
                 width: parent.width
-                height: Style.space(58)
-                radius: Style.cornerRadius
-                color: hasCursor ? Style.selectedFill : (rowHover.containsMouse ? Style.hoverFill : "transparent")
+                game: modelData
+                hasCursor: isSelected
+                nowSeconds: root.nowSeconds
+                foreground: root.foreground
+                dim: root.dim
+                accent: root.accent
+                fontFamily: root.fontFamily
 
-                onHasCursorChanged: if (hasCursor) root.ensureVisible(continueRow)
+                onIsSelectedChanged: if (isSelected) root.ensureVisible(continueRow)
 
-                Row {
-                  anchors.fill: parent
-                  anchors.leftMargin: Style.space(8)
-                  anchors.rightMargin: Style.space(10)
-                  spacing: Style.space(10)
-
-                  Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Style.space(66)
-                    height: Style.space(44)
-                    radius: Style.cornerRadius
-                    color: Util.alpha(root.foreground, 0.10)
-                    clip: true
-
-                    Image {
-                      id: stateThumb
-                      anchors.fill: parent
-                      source: Util.fileUrl(continueRow.modelData.resumeArt)
-                      fillMode: Image.PreserveAspectCrop
-                      asynchronous: true
-                      // The state thumbnail is rewritten in place every time
-                      // you save, so a cached copy would show a stale frame.
-                      cache: false
-                      visible: status === Image.Ready
-                    }
-
-                    // Without a thumbnail the row still has to read as a
-                    // resumable game, so the slot itself becomes the badge.
-                    Text {
-                      anchors.centerIn: parent
-                      visible: stateThumb.status !== Image.Ready
-                      text: continueRow.modelData.resumeSlot === "auto"
-                            ? "AUTO" : ("SLOT " + continueRow.modelData.resumeSlot)
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-
-                  Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - Style.space(66) - Style.space(10) - resumeHint.width - Style.space(10)
-                    spacing: Style.space(2)
-
-                    Text {
-                      width: parent.width
-                      text: continueRow.modelData.title
-                      textFormat: Text.PlainText
-                      color: continueRow.hasCursor ? Color.menu.selectedText : root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      elide: Text.ElideRight
-                    }
-
-                    Text {
-                      width: parent.width
-                      text: {
-                        var g = continueRow.modelData
-                        var bits = []
-                        var ago = Library.formatAgo(g.resumeAt, root.nowSeconds)
-                        if (ago) bits.push("saved " + ago)
-                        var sys = Library.systemAndCore(g)
-                        if (sys) bits.push(sys)
-                        return bits.join(" · ")
-                      }
-                      textFormat: Text.PlainText
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
-                    }
-                  }
-
-                  Text {
-                    id: resumeHint
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "󰐊"
-                    color: continueRow.hasCursor ? root.accent : root.dim
-                    opacity: continueRow.hasCursor || rowHover.containsMouse ? 1 : 0.4
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.iconLarge
-                  }
+                onHovered: {
+                  root.cursorActive = true
+                  root.focusZone = "list"
+                  root.cursorIndex = index
                 }
-
-                MouseArea {
-                  id: rowHover
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  acceptedButtons: Qt.LeftButton | Qt.RightButton
-                  onContainsMouseChanged: if (containsMouse) {
-                    root.cursorActive = true
-                    root.focusZone = "list"
-                    root.cursorIndex = continueRow.index
-                  }
-                  // Right-click is the mouse's way of saying "from the top",
-                  // matching Shift+Enter and "f" on the keyboard.
-                  onClicked: function (mouse) {
-                    root.launch(continueRow.modelData, mouse.button !== Qt.RightButton)
-                  }
+                onActivated: function (resume) {
+                  root.launch(modelData, resume)
                 }
               }
             }
@@ -764,159 +670,37 @@ Panel {
             Repeater {
               model: root.libraryRows
 
-              delegate: Rectangle {
+              delegate: LibraryRow {
                 id: libraryRow
                 required property int index
                 required property var modelData
-                readonly property bool hasCursor:
+                readonly property bool isSelected:
                   root.cursorActive && root.focusZone === "list"
                   && root.selectedKey() === root.targetKey("library", modelData)
 
                 width: parent.width
-                // The row grows under the cursor to show what it knows about
-                // the game -- playtime, and whether there is a save to come
-                // back to. Only the focused row pays for the space, so a
-                // hundred-game library still reads as a list.
-                height: hasCursor ? Style.space(62) : Style.space(38)
-                radius: Style.cornerRadius
-                color: hasCursor ? Style.selectedFill : (libHover.containsMouse ? Style.hoverFill : "transparent")
-                clip: true
+                game: modelData
+                hasCursor: isSelected
+                filterText: root.query
+                nowSeconds: root.nowSeconds
+                foreground: root.foreground
+                dim: root.dim
+                accent: root.accent
+                fontFamily: root.fontFamily
 
-                Behavior on height {
-                  NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
+                onIsSelectedChanged: if (isSelected) root.ensureVisible(libraryRow)
+                // The row grows under the cursor over 90ms, so geometry
+                // measured at cursor-entry is short; re-check as it settles
+                // or the scroll lands above the expanded row's bottom edge.
+                onHeightChanged: if (isSelected) root.ensureVisible(libraryRow)
+
+                onHovered: {
+                  root.cursorActive = true
+                  root.focusZone = "list"
+                  root.cursorIndex = root.continueRows.length + index
                 }
-
-                onHasCursorChanged: if (hasCursor) root.ensureVisible(libraryRow)
-
-                Row {
-                  anchors.fill: parent
-                  anchors.leftMargin: Style.space(8)
-                  anchors.rightMargin: Style.space(10)
-                  anchors.topMargin: Style.space(6)
-                  anchors.bottomMargin: Style.space(6)
-                  spacing: Style.space(8)
-
-                  Rectangle {
-                    anchors.top: parent.top
-                    width: libraryRow.hasCursor ? Style.space(48) : Style.space(26)
-                    height: width
-                    radius: Style.cornerRadius
-                    color: Util.alpha(root.foreground, 0.08)
-                    clip: true
-
-                    Behavior on width {
-                      NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
-                    }
-
-                    Image {
-                      id: boxart
-                      anchors.fill: parent
-                      source: Util.fileUrl(libraryRow.modelData.art)
-                      fillMode: Image.PreserveAspectCrop
-                      asynchronous: true
-                      visible: status === Image.Ready
-                    }
-
-                    Text {
-                      anchors.centerIn: parent
-                      visible: boxart.status !== Image.Ready
-                      text: "󰋙"
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.iconSmall
-                    }
-                  }
-
-                  // The system belongs under the title rather than beside it:
-                  // on the right it competed with the title for the same
-                  // width and lost, eliding to "Nintendo - Sup...".
-                  Column {
-                    anchors.top: parent.top
-                    width: parent.width - (libraryRow.hasCursor ? Style.space(48) : Style.space(26))
-                           - Style.space(8) * 2 - resumeDot.width
-                    spacing: Style.space(1)
-
-                    Text {
-                      width: parent.width
-                      text: libraryRow.modelData.title
-                      textFormat: Text.PlainText
-                      color: libraryRow.hasCursor ? Color.menu.selectedText : root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.bodySmall
-                      elide: Text.ElideRight
-                    }
-
-                    Text {
-                      width: parent.width
-                      visible: text.length > 0
-                      text: Library.systemAndCore(libraryRow.modelData)
-                      textFormat: Text.PlainText
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
-                    }
-
-                    Text {
-                      width: parent.width
-                      visible: libraryRow.hasCursor
-                      opacity: libraryRow.hasCursor ? 1 : 0
-                      text: Library.playSummary(libraryRow.modelData, root.nowSeconds)
-                      textFormat: Text.PlainText
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
-                      Behavior on opacity { NumberAnimation { duration: 90 } }
-                    }
-
-                    // Only says something when there is something to say: a
-                    // save to come back to, and which slot it is in.
-                    Text {
-                      width: parent.width
-                      visible: libraryRow.hasCursor && libraryRow.modelData.resumeAt > 0
-                      text: {
-                        var g = libraryRow.modelData
-                        var slot = g.resumeSlot === "auto" ? "auto save" : ("slot " + g.resumeSlot)
-                        var ago = Library.formatAgo(g.resumeAt, root.nowSeconds)
-                        return "⏎ resumes " + slot + (ago ? " · saved " + ago : "")
-                      }
-                      textFormat: Text.PlainText
-                      color: root.accent
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
-                    }
-                  }
-
-                  // A dot rather than a third line: it says "this one has a
-                  // save" at a glance without growing the row again.
-                  Rectangle {
-                    id: resumeDot
-                    anchors.top: parent.top
-                    anchors.topMargin: Style.space(6)
-                    width: Style.space(5)
-                    height: width
-                    radius: width / 2
-                    color: root.accent
-                    visible: libraryRow.modelData.resumeAt > 0
-                  }
-                }
-
-                MouseArea {
-                  id: libHover
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  acceptedButtons: Qt.LeftButton | Qt.RightButton
-                  onContainsMouseChanged: if (containsMouse) {
-                    root.cursorActive = true
-                    root.focusZone = "list"
-                    root.cursorIndex = root.continueRows.length + libraryRow.index
-                  }
-                  onClicked: function (mouse) {
-                    root.launch(libraryRow.modelData, mouse.button !== Qt.RightButton)
-                  }
+                onActivated: function (resume) {
+                  root.launch(modelData, resume)
                 }
               }
             }
@@ -929,7 +713,7 @@ Panel {
           // find one.
           Column {
             width: parent.width
-            visible: root.retroarchMissing
+            visible: lib.retroarchMissing
             spacing: Style.space(8)
 
             Text {
@@ -981,8 +765,8 @@ Panel {
           // ROMs rather than only reporting their absence.
           Column {
             width: parent.width
-            visible: root.games.length === 0 && !root.scanning && root.loadError === ""
-                     && !root.retroarchMissing
+            visible: root.games.length === 0 && !lib.scanning && lib.loadError === ""
+                     && !lib.retroarchMissing
             spacing: Style.space(6)
 
             Text {
@@ -1033,7 +817,7 @@ Panel {
             width: parent.width
             visible: coreRows.model.length > 0
             text: {
-              var undecided = Library.undecidedExtensions(root.extensions).length
+              var undecided = Session.undecidedExtensions(lib.extensions).length
               return undecided > 0 ? ("Cores · " + undecided + " to choose") : "Cores"
             }
             foreground: root.foreground
@@ -1046,7 +830,7 @@ Panel {
 
             Repeater {
               id: coreRows
-              model: Library.choosableExtensions(root.extensions)
+              model: Session.choosableExtensions(lib.extensions)
 
               delegate: Item {
                 id: coreRow
@@ -1091,22 +875,24 @@ Panel {
             }
           }
 
-          // --- Footer ---------------------------------------------------------
-          Text {
-            width: parent.width
-            visible: root.games.length > 0
-            horizontalAlignment: Text.AlignHCenter
-            text: root.systems.length > 1
-                  ? "⇥ zones   ⏎ resume   f fresh   b browse all   r rescan"
-                  : "⏎ resume   f start fresh   b browse all   r rescan"
-            textFormat: Text.PlainText
-            color: root.dim
-            opacity: 0.7
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
         }
       }
+
+        // --- Pinned shortcut guide ------------------------------------------
+        // Fixed to the bottom edge instead of sitting at the end of the
+        // scroll, so the keys that work right now are always in view.
+        PanelFooter {
+          id: pinnedFooter
+          anchors {
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+          }
+          visible: root.games.length > 0
+          hints: root.footerHints
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
     }
   }
 }

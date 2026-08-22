@@ -32,6 +32,7 @@ function parseLibrary(raw) {
       key: String(g.key || g.rom),
       title: prettyTitle(g.title),
       system: String(g.system || ""),
+      sysKey: systemKey(g),
       core: String(g.core),
       coreName: String(g.coreName || ""),
       rom: String(g.rom),
@@ -39,6 +40,7 @@ function parseLibrary(raw) {
       resumeSlot: String(g.resumeSlot || ""),
       resumeArt: String(g.resumeArt || ""),
       resumeAt: Number(g.resumeAt || 0),
+      addedAt: Number(g.addedAt || 0),
       lastPlayed: Number(g.lastPlayed || 0),
       playSeconds: Number(g.playSeconds || 0),
       playCount: Number(g.playCount || 0)
@@ -349,6 +351,44 @@ function formatAgo(epochSeconds, nowSeconds) {
   return Math.round(delta / 604800) + "w ago"
 }
 
+// HTML for a title with the search match accented. Greedy left-to-right --
+// the same pass subsequenceScore runs -- so what lights up is exactly what
+// matched. Output is escaped HTML; an empty or fully-unmatched query returns
+// the plain escaped title, which renders identically to PlainText.
+function highlightTitle(raw, query, accent) {
+  var text = String(raw || "")
+  if (!text.length) return ""
+  var q = String(query || "").trim().toLowerCase()
+
+  function esc(c) {
+    return c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c
+  }
+
+  var marks = []
+  if (q.length) {
+    var lower = text.toLowerCase()
+    var ni = 0
+    for (var i = 0; i < lower.length && ni < q.length; i++) {
+      if (lower.charAt(i) === q.charAt(ni)) { marks[i] = 1; ni++ }
+    }
+    if (ni < q.length) marks = []
+  }
+
+  var out = ""
+  var j = 0
+  while (j < text.length) {
+    if (marks[j]) {
+      var run = ""
+      while (j < text.length && marks[j]) { run += esc(text.charAt(j)); j++ }
+      out += '<b><font color="' + accent + '">' + run + "</font></b>"
+    } else {
+      out += esc(text.charAt(j))
+      j++
+    }
+  }
+  return out
+}
+
 // Node (tests) reaches the same functions the QML `.import` reaches.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
@@ -366,6 +406,7 @@ if (typeof module !== "undefined" && module.exports) {
     resumableIn: resumableIn,
     formatAgo: formatAgo,
     formatDuration: formatDuration,
-    playSummary: playSummary
+    playSummary: playSummary,
+    highlightTitle: highlightTitle
   }
 }
