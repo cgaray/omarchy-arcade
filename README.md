@@ -83,6 +83,8 @@ and the more detailed
 [playlists and thumbnails guide](https://docs.libretro.com/guides/roms-playlists-thumbnails/#thumbnails).
 
 Return to Arcade and press `r` to refresh after RetroArch finishes.
+From the bar panel, press `b` to bring up the desktop overlay; right-clicking
+the Arcade bar icon opens it directly.
 
 Optionally bind them. In `~/.config/hypr/bindings.conf`:
 
