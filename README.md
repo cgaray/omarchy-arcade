@@ -47,6 +47,15 @@ share nothing at runtime — and do not need to. Both run the same scanner and
 read the same `cores.conf` and save states, so the disk is the shared state: a
 core chosen in one is already in force in the other.
 
+## Requirements
+
+- Omarchy Quattro
+- RetroArch and at least one installed libretro core to launch games
+- Bash and `jq`, both included in a standard Omarchy installation
+
+Arcade has no install hooks, bundled dependencies, network requests, or
+privileged setup.
+
 ## Install
 
 ```bash
@@ -60,6 +69,21 @@ or by hand in `~/.config/omarchy/shell.json`:
 { "bar": { "layout": { "right": [ { "id": "io.github.cgaray.arcade" } ] } } }
 ```
 
+### Prepare RetroArch
+
+Arcade reads RetroArch playlists rather than scanning ROM directories itself.
+In RetroArch, open **Import Content**, scan the directory containing your ROMs,
+and wait for the system playlists to be created. See Libretro's official
+[scan and import guide](https://docs.libretro.com/guides/import-content/#step-2-scan-and-import).
+
+For cover art, open **Online Updater → Playlist Thumbnails Updater** and select
+each imported system. See the official
+[box-art instructions](https://docs.libretro.com/guides/import-content/#step-3-add-box-art)
+and the more detailed
+[playlists and thumbnails guide](https://docs.libretro.com/guides/roms-playlists-thumbnails/#thumbnails).
+
+Return to Arcade and press `r` to refresh after RetroArch finishes.
+
 Optionally bind them. In `~/.config/hypr/bindings.conf`:
 
 ```
@@ -68,6 +92,22 @@ bindd = SUPER, G, Arcade, exec, omarchy-shell io.github.cgaray.arcade toggle
 # so the hotkey never reaches the window behind the overlay.
 bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell toggle io.github.cgaray.arcade '{}'
 ```
+
+## Remove
+
+```bash
+omarchy plugin remove io.github.cgaray.arcade
+```
+
+Removal leaves play history and core choices in place in case Arcade is
+installed again. Delete only Arcade's retained data with:
+
+```bash
+rm -rf "$HOME/.local/state/omarchy-arcade" "$HOME/.config/omarchy/arcade"
+```
+
+Neither command modifies RetroArch's configuration, playlists, ROMs, save
+states, or thumbnails.
 
 ## Your library
 
