@@ -1,57 +1,32 @@
 # Arcade
 
-Your games in the Omarchy bar, each one showing the frame you paused on.
-Press Enter and you are back inside it.
+Arcade is an Omarchy plugin for browsing and launching your RetroArch library.
+Use the bar panel to resume a recent save or open the full library as a
+cover-art grid.
 
 <p align="center">
-  <img src="preview.png" alt="The Arcade bar panel: a Continue shelf of save-state thumbnails above the game library" width="380">
+  <img src="preview.png" alt="Arcade's bar panel showing recent saves and the game library" width="380">
 </p>
-
-Press `b`, or right-click the bar icon, and the whole library opens as a wall
-of cover art.
 
 <p align="center">
-  <img src="preview-overlay.png" alt="The Arcade overlay: a fullscreen grid of game cover art with system filters" width="820">
+  <img src="preview-overlay.png" alt="Arcade's full library with cover art and system filters" width="820">
 </p>
 
-## Why this and not a game launcher
+## Features
 
-A launcher lists games. Arcade is built around getting back to the exact game
-you meant to play with as little ceremony as possible.
-
-- **Continue, not launch.** The top shelf is your save states, newest first,
-  each showing the actual frame RetroArch captured when you saved. `Enter`
-  resumes it. `f` starts the same game fresh.
-- **Your library has memory.** The wall sorts by when games arrived, when you
-  last played, or when you last saved, and tracks session count and playtime.
-- **RetroArch stays authoritative.** Playlists, installed cores, save states,
-  and thumbnail art remain the source instead of being duplicated in Arcade.
-- **It is themed.** Arcade draws from the same tokens as the rest of the shell,
-  so it already matches whatever theme you run.
-
-The result belongs in the shell because it is available where the decision to
-play happens, without another application window to manage.
-
-## Two surfaces, one plugin
-
-Arcade ships a bar widget and a fullscreen overlay from the same plugin id.
-They do different jobs:
-
-| Surface | For |
-|---|---|
-| **Bar panel** | Picking up where you left off. The Continue shelf, search, and a resume in two keystrokes. |
-| **Overlay** | Browsing. A hundred games as cover art, filtered by system. |
-
-The shell instantiates the two entry points as separate object trees, so they
-share nothing at runtime — and do not need to. Both run the same scanner and
-read the same `cores.conf` and save states, so the disk is the shared state: a
-core chosen in one is already in force in the other.
+- Resume save states from their RetroArch screenshots, or start games fresh.
+- Browse by system and sort by date added, save date, last played, or name.
+- Search from either the bar panel or the fullscreen overlay.
+- Use RetroArch playlists, installed cores, save states, and thumbnail art
+  without duplicating your library.
+- Track playtime and remember core choices.
+- Follow the active Omarchy theme.
 
 ## Requirements
 
 - Omarchy Quattro
-- RetroArch and at least one installed libretro core to launch games
-- Bash and `jq`, both included in a standard Omarchy installation
+- RetroArch with at least one installed libretro core
+- Bash and `jq`, included with Omarchy
 
 Arcade has no install hooks, bundled dependencies, network requests, or
 privileged setup.
@@ -62,8 +37,8 @@ privileged setup.
 omarchy plugin add https://github.com/cgaray/omarchy-arcade.git --enable
 ```
 
-Then add `io.github.cgaray.arcade` to your bar from **Omarchy menu → Settings → Bar**,
-or by hand in `~/.config/omarchy/shell.json`:
+Add `io.github.cgaray.arcade` to the bar from **Omarchy menu > Settings >
+Bar**, or add it to `~/.config/omarchy/shell.json`:
 
 ```jsonc
 { "bar": { "layout": { "right": [ { "id": "io.github.cgaray.arcade" } ] } } }
@@ -71,29 +46,74 @@ or by hand in `~/.config/omarchy/shell.json`:
 
 ### Prepare RetroArch
 
-Arcade reads RetroArch playlists rather than scanning ROM directories itself.
-In RetroArch, open **Import Content**, scan the directory containing your ROMs,
-and wait for the system playlists to be created. See Libretro's official
+Arcade reads RetroArch playlists instead of scanning ROM directories. In
+RetroArch, open **Import Content** and scan your ROM directory. See Libretro's
 [scan and import guide](https://docs.libretro.com/guides/import-content/#step-2-scan-and-import).
 
-For cover art, open **Online Updater → Playlist Thumbnails Updater** and select
-each imported system. See the official
-[box-art instructions](https://docs.libretro.com/guides/import-content/#step-3-add-box-art)
-and the more detailed
-[playlists and thumbnails guide](https://docs.libretro.com/guides/roms-playlists-thumbnails/#thumbnails).
+To add cover art, open **Online Updater > Playlist Thumbnails Updater** and
+select each imported system. See Libretro's
+[thumbnail guide](https://docs.libretro.com/guides/roms-playlists-thumbnails/#thumbnails)
+for details.
 
-Return to Arcade and press `r` to refresh after RetroArch finishes.
-From the bar panel, press `b` to bring up the desktop overlay; right-clicking
-the Arcade bar icon opens it directly.
+Press `r` in Arcade after RetroArch finishes.
 
-Optionally bind them. In `~/.config/hypr/bindings.conf`:
+## Use
 
-```
-bindd = SUPER, G, Arcade, exec, omarchy-shell io.github.cgaray.arcade toggle
-# Toggle the fullscreen library: opens it, or dismisses it when already up --
-# so the hotkey never reaches the window behind the overlay.
-bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell toggle io.github.cgaray.arcade '{}'
-```
+Click the bar icon to open the panel. Press `b` from the panel, or right-click
+the bar icon, to open the fullscreen library.
+
+### Bar panel
+
+| Key | Action |
+|---|---|
+| `Up` / `Down` | Move through the list |
+| `Enter` | Resume the selected game, or start it if no save exists |
+| `f` | Start the selected game fresh |
+| `s` / `S` | Select the next or previous system |
+| `/` | Search |
+| `b` | Open the fullscreen library |
+| `r` | Rescan the library |
+| `Esc` | Clear search, then close the panel |
+
+Left-clicking a game resumes it; right-clicking starts it fresh.
+Middle-clicking the bar icon rescans the library.
+
+### Fullscreen library
+
+Use the arrow keys to move, `Enter` to resume, and `f` to start fresh. Start
+typing to search. `Tab` and `Shift+Tab` change systems, `Ctrl+S` shows only
+games with save states, and `?` lists every shortcut. Press `Esc` to close.
+
+## Core selection
+
+Arcade detects installed cores from RetroArch's `.info` files. When multiple
+cores support the same ROM type, choose one in the **Cores** section at the
+bottom of the bar panel. Choices are stored in
+`~/.config/omarchy/arcade/cores.conf`.
+
+Arcade chooses a core in this order:
+
+1. The core assigned to the playlist entry.
+2. The playlist's default core.
+3. Your choice in `cores.conf`.
+4. The first installed core that supports the ROM type.
+
+Games without a usable installed core are omitted.
+
+## Settings
+
+Configure Arcade from the bar widget settings or in `shell.json`:
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `refreshIntervalSec` | 300 | Full rescan interval |
+| `watchRoms` | true | Watch for library and save-state changes |
+| `watchIntervalSec` | 10 | Change-check interval |
+| `maxLibraryRows` | 40 | Maximum rows rendered in the bar panel |
+
+Play history and first-seen dates are stored in
+`~/.local/state/omarchy-arcade`. Arcade does not modify RetroArch's playlists,
+ROMs, save states, or thumbnails.
 
 ## Remove
 
@@ -101,140 +121,11 @@ bindd = SUPER SHIFT, G, Arcade library, exec, omarchy-shell shell toggle io.gith
 omarchy plugin remove io.github.cgaray.arcade
 ```
 
-Removal leaves play history and core choices in place in case Arcade is
-installed again. Delete only Arcade's retained data with:
+Play history and core choices are retained for future installations. Remove
+them with:
 
 ```bash
 rm -rf "$HOME/.local/state/omarchy-arcade" "$HOME/.config/omarchy/arcade"
-```
-
-Neither command modifies RetroArch's configuration, playlists, ROMs, save
-states, or thumbnails.
-
-## Your library
-
-Arcade reads RetroArch playlists from
-`~/.config/retroarch/playlists/*.lpl`. RetroArch owns content scanning and
-provides the title, system, core hint, and database name.
-
-Scan new content in RetroArch. Arcade watches playlists, save states, and core
-choices. Press `r` to refresh immediately.
-
-The watch is a poll, not an inotify watch: the scanner has a `--fingerprint`
-mode that signs the ROM tree in a few milliseconds, so the panel checks that
-every ten seconds and only pays for a full rescan when it moves. That avoids
-depending on `inotify-tools`, avoids exhausting the kernel's watch limit on a
-large tree, and leaves no monitor process to keep alive across a shell
-restart. Rescans themselves stay cheap — one jq pass per playlist, no
-per-game process spawns — a few hundred milliseconds for a thousand games.
-
-Box art comes from RetroArch's own thumbnail cache — Arcade downloads nothing.
-Arcade records when each ROM first enters the library in
-`~/.local/state/omarchy-arcade/added.json`; removing and later re-importing a
-ROM keeps that original date.
-
-### Browsing by system
-
-Once a library spans more than one system, a filter row appears above it:
-`All · 101`, `NES · 49`, `SNES · 52`. Click one, or press `s` to walk them.
-Systems come from the playlist.
-
-The fullscreen overlay can order the current wall by **Date added**, **Save
-date**, **Last played**, or **Name**. Date added is persistent; existing
-libraries establish their baseline on the first scan after upgrading.
-
-## Which emulator runs a game
-
-Every row shows it next to the system — `SNES · snes9x` — so the core is
-visible before you press anything, not discovered when the emulator opens.
-
-Arcade carries no table of opinions about which core is best. RetroArch ships
-a `.info` file per core declaring what it supports, and that is the only
-honest source for what your machine can actually run. Several cores usually
-claim the same extension, and choosing between them is yours to make: the
-**Cores** section at the bottom of the panel lists every extension in your
-library that more than one installed core can open, with a dropdown of the
-candidates. Picking one writes `~/.config/omarchy/arcade/cores.conf`, which
-you can also edit by hand:
-
-```
-# one "ext = core" per line
-sfc = snes9x
-zip = mame
-```
-
-Note that a playlist usually does *not* answer the question. Scanning a
-directory in RetroArch writes `"core_path": "DETECT"` on every entry, meaning
-"decide at launch". The full order, most specific first:
-
-1. **The core the playlist entry is pinned to**, if it is installed.
-2. **The core the whole playlist is pinned to** (`default_core_path`).
-3. **Your choice in `cores.conf`.**
-4. **The first candidate** RetroArch's `.info` files offer, so the game is
-   launchable while the choice is still outstanding.
-
-A core named by a playlist but not installed falls through to the next choice.
-Entries without a usable core are omitted.
-
-## Keys
-
-| Key | Does |
-|---|---|
-| `↑` `↓` | Move |
-| `Enter` | Play, resuming the save state if there is one |
-| `f` | Start fresh, ignoring the save state |
-| `s` | Next system (`S` for previous) |
-| `b` | Open the fullscreen library |
-| `/` | Jump to search |
-| `r` | Rescan |
-| `Esc` | Clear the search, then close |
-
-Right-click a row to start it fresh; left-click resumes. Right-clicking the
-bar icon opens the fullscreen library on whatever system you were looking at;
-middle-clicking rescans.
-
-Both surfaces show a hint bar along the bottom that follows what you are
-doing — browsing, filtering, or choosing a system — so the keys that work
-right now are always visible without opening a help screen.
-
-In the overlay, arrow keys move, `Tab` walks the systems (`Shift+Tab`
-backwards), typing filters, and there is no search box to reach for — the
-whole surface is one. `Ctrl+S` narrows to games with save states, and `?`
-shows every shortcut.
-
-## Settings
-
-Configurable from the bar's widget settings, or inline in `shell.json`:
-
-| Setting | Default | Does |
-|---|---|---|
-| `refreshIntervalSec` | 300 | Full rescan interval, as a safety net behind the watch. |
-| `watchRoms` | true | Notice new ROMs, save states, and playlist imports without waiting. |
-| `watchIntervalSec` | 10 | How often the cheap change-check runs. |
-| `maxLibraryRows` | 40 | Caps rendered rows in the bar panel; search still covers everything. |
-
-## Layout
-
-| Path | What |
-|---|---|
-| `Panel.qml` | The bar button and its popup: state, navigation, policy. |
-| `Overlay.qml` | The fullscreen cover-art grid: state, navigation, policy. |
-| `ArcadeLibrary.qml` | The shared library feed: scanning, fingerprint polling, parsing. |
-| `ContinueRow.qml` / `LibraryRow.qml` | Panel shelf and list rows; presentation only. |
-| `GameTile.qml` / `InspectorCard.qml` | Overlay tile and detail card; presentation only. |
-| `KeyHintBar.qml` | Contextual keycap hints both surfaces show. |
-| `bin/omarchy-arcade-cores` | Reads RetroArch's core `.info` files; records core choices. |
-| `Library.js` | Filtering, ranking, Continue selection, system names. Pure, tested. |
-| `ArcadeSession.js` | The one seam the views import: rebuilds the view model, formats display strings. Pure, tested. |
-| `bin/omarchy-arcade-scan` | Builds the library as JSON; `--fingerprint` signs it cheaply. |
-| `bin/omarchy-arcade-launch` | Launches a game and holds the desktop still. |
-
-Both scripts run standalone:
-
-```bash
-./bin/omarchy-arcade-scan | jq '.games[0]'
-./bin/omarchy-arcade-launch --core /usr/lib/libretro/snes9x_libretro.so \
-                            --rom ~/Games/roms/game.sfc --slot 0
 ```
 
 ## Tests
@@ -242,18 +133,6 @@ Both scripts run standalone:
 ```bash
 ./tests/run.sh
 ```
-
-The suite validates the manifest, shell syntax, QML, plugin contracts, QML
-references, library helpers, launcher behavior, and playlist scanning. Fixture
-cores keep the scanner tests independent of the host system.
-
-## Status
-
-Working end to end: both surfaces, the Continue shelf with save-state
-thumbnails, box art, search, per-system browsing, the core picker, playlist
-scanning, and desktop integration. If RetroArch is not installed,
-either surface says so and offers Omarchy's own installer.
-
 
 ## License
 

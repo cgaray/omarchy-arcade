@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.cgaray.arcade",
   "name": "Arcade",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Christopher Garay",
   "license": "MIT",
   "description": "Your retro games in the Omarchy bar, each one showing the frame you paused on \u2014 plus a fullscreen cover-art grid for browsing the whole library.",
