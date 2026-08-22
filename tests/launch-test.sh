@@ -13,17 +13,11 @@ touch "$FIXTURE/core.so" "$FIXTURE/game.rom"
 cat >"$FIXTURE/bin/omarchy-shell" <<'SCRIPT'
 #!/bin/bash
 printf 'shell %s\n' "$*" >>"$FAKE_LOG"
-if [[ $* == *"notifications dndState"* ]]; then
-  printf '%s\n' "${FAKE_DND:-false}"
-fi
 SCRIPT
 
 cat >"$FIXTURE/bin/omarchy-toggle-idle" <<'SCRIPT'
 #!/bin/bash
 printf 'idle %s\n' "$*" >>"$FAKE_LOG"
-if [[ $1 == status ]]; then
-  printf '{"enabled":%s}\n' "${FAKE_IDLE:-false}"
-fi
 SCRIPT
 
 cat >"$FIXTURE/bin/retroarch" <<'SCRIPT'
@@ -38,8 +32,6 @@ run_launch() {
   HOME="$FIXTURE/home" \
   XDG_STATE_HOME="$FIXTURE/state" \
   FAKE_LOG="$FIXTURE/calls.log" \
-  FAKE_DND="${FAKE_DND:-false}" \
-  FAKE_IDLE="${FAKE_IDLE:-false}" \
   FAKE_RETROARCH_STATUS="${FAKE_RETROARCH_STATUS:-0}" \
   "$LAUNCH" --core "$FIXTURE/core.so" --rom "$FIXTURE/game.rom" "$@"
 }
@@ -55,19 +47,29 @@ check() {
 }
 
 run_launch
-check "DND is restored after success" "1" "$(grep -c 'notifications setDnd false' "$FIXTURE/calls.log")"
-check "idle is restored after success" "1" "$(grep -c 'idle allow-idle' "$FIXTURE/calls.log")"
 check "successful play is recorded" "1" "$(jq '. | length' "$FIXTURE/state/omarchy-arcade/plays.json")"
+check "RetroArch launches fullscreen" "1" "$(grep -c 'retroarch .*--fullscreen' "$FIXTURE/calls.log")"
+check "desktop state tools are never called" "0" "$(grep -cE '^(shell|idle) ' "$FIXTURE/calls.log" || true)"
 
 : >"$FIXTURE/calls.log"
-FAKE_DND=true FAKE_IDLE=true FAKE_RETROARCH_STATUS=7 run_launch
+FAKE_RETROARCH_STATUS=7 run_launch
 status=$?
 check "emulator status is preserved" "7" "$status"
-check "pre-existing DND is not undone" "0" "$(grep -c 'notifications setDnd false' "$FIXTURE/calls.log")"
-check "pre-existing idle is not undone" "0" "$(grep -c 'idle allow-idle' "$FIXTURE/calls.log")"
+
+: >"$FIXTURE/calls.log"
+run_launch --slot 3
+check "numeric slots use entryslot" "1" "$(grep -c -- '--entryslot 3' "$FIXTURE/calls.log")"
+
+: >"$FIXTURE/calls.log"
+run_launch --slot auto
+check "auto slots use an appended config" "1" "$(grep -c -- '--appendconfig .*arcade-resume-' "$FIXTURE/calls.log")"
+
+: >"$FIXTURE/calls.log"
+run_launch --slot 12 >/dev/null 2>&1
+check "invalid slots are rejected" "1" "$?"
 
 if (( failures )); then
   echo "launch-test: $failures failed"
   exit 1
 fi
-echo "launch-test: 6 passed"
+echo "launch-test: 7 passed"

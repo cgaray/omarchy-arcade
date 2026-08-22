@@ -62,13 +62,10 @@ function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly, s
   }
 }
 
-function launchRequest(game, settings, resume, launcherPath) {
+function launchRequest(game, resume, launcherPath) {
   if (!game) return []
-  var config = settings || {}
   var args = [launcherPath, "--core", game.core, "--rom", game.rom]
   if (resume && game.resumeSlot) args.push("--slot", game.resumeSlot)
-  if (config.silenceNotifications === false) args.push("--keep-notifications")
-  if (config.stayAwake === false) args.push("--allow-idle")
   return args
 }
 

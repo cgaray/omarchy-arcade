@@ -27,15 +27,10 @@ const game = (over) => Object.assign({
   addedAt: 0
 }, over || {})
 
-const settings = {
-  silenceNotifications: false,
-  stayAwake: false
-}
-
 assert.deepStrictEqual(
-  Session.launchRequest(game({ resumeSlot: "auto" }), settings, true, "/bin/launch"),
+  Session.launchRequest(game({ resumeSlot: "auto" }), true, "/bin/launch"),
   ["/bin/launch", "--core", "/cores/snes9x_libretro.so", "--rom", "/roms/a.sfc",
-   "--slot", "auto", "--keep-notifications", "--allow-idle"]
+   "--slot", "auto"]
 )
 
 const rebuilt = Session.rebuild([

@@ -1,22 +1,16 @@
 #!/bin/bash
 
-# Launch a game and hold the desktop still while it runs.
-#
-# Launch the emulator and restore desktop settings after the session.
+# Launch a game and persist its play history.
 
 set -uo pipefail
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-arcade"
 PLAYS_FILE="$STATE_DIR/plays.json"
 RETROARCH_CMD="${RETROARCH_CMD:-retroarch}"
-OMARCHY_SHELL_CMD="${OMARCHY_SHELL_CMD:-omarchy-shell}"
-OMARCHY_IDLE_CMD="${OMARCHY_IDLE_CMD:-omarchy-toggle-idle}"
 
 CORE=""
 ROM=""
 SLOT=""
-SILENCE_NOTIFICATIONS=1
-SUPPRESS_IDLE=1
 
 die() {
   echo "omarchy-arcade-launch: $*" >&2
@@ -27,14 +21,11 @@ usage() {
   cat <<USAGE
 Usage: omarchy-arcade-launch --core <path> --rom <path> [--slot <n|auto>]
 
-Launches a libretro core fullscreen, optionally resuming a save state, with
-notifications silenced and idle suppressed for the duration.
+Launches a libretro core fullscreen, optionally resuming a save state.
 
   --core                Absolute path to the libretro core (.so)
   --rom                 Absolute path to the ROM
   --slot                Save state slot to resume from: 0-9, or "auto"
-  --keep-notifications  Leave do-not-disturb alone
-  --allow-idle          Leave the screensaver and lock screen alone
 USAGE
 }
 
@@ -43,8 +34,6 @@ while (( $# )); do
     --core) CORE="${2:-}"; shift 2 ;;
     --rom)  ROM="${2:-}";  shift 2 ;;
     --slot) SLOT="${2:-}"; shift 2 ;;
-    --keep-notifications) SILENCE_NOTIFICATIONS=0; shift ;;
-    --allow-idle) SUPPRESS_IDLE=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -55,43 +44,6 @@ done
 [[ -f $CORE ]] || die "core not found: $CORE"
 [[ -f $ROM ]]  || die "ROM not found: $ROM"
 command -v "$RETROARCH_CMD" >/dev/null || die "retroarch is not installed"
-
-# --- Save and restore the desktop ------------------------------------------
-
-# Read the current state before changing it, so a user who was already in DND
-# is still in DND when the game exits. Both reads tolerate a shell that is not
-# running (a game launched from a TTY), in which case there is nothing to
-# restore either.
-PREV_DND=""
-PREV_IDLE=""
-
-capture_desktop() {
-  (( SILENCE_NOTIFICATIONS )) && PREV_DND=$("$OMARCHY_SHELL_CMD" -q notifications dndState 2>/dev/null | tr -d '[:space:]')
-  (( SUPPRESS_IDLE )) && PREV_IDLE=$("$OMARCHY_IDLE_CMD" status 2>/dev/null | jq -r '.enabled // false' 2>/dev/null)
-}
-
-refresh_indicators() {
-  "$OMARCHY_SHELL_CMD" -q omarchy.indicators refresh >/dev/null 2>&1
-}
-
-apply_desktop_policy() {
-  (( SILENCE_NOTIFICATIONS )) && "$OMARCHY_SHELL_CMD" -q notifications setDnd true >/dev/null 2>&1
-  (( SUPPRESS_IDLE )) && "$OMARCHY_IDLE_CMD" stay-awake >/dev/null 2>&1
-  refresh_indicators
-}
-
-restore_desktop() {
-  # Only undo what we actually changed. A user who was already in
-  # do-not-disturb before launching stays in it afterwards.
-  [[ $PREV_DND == "false" ]] && "$OMARCHY_SHELL_CMD" -q notifications setDnd false >/dev/null 2>&1
-  [[ $PREV_IDLE == "false" ]] && "$OMARCHY_IDLE_CMD" allow-idle >/dev/null 2>&1
-  refresh_indicators
-  return 0
-}
-trap restore_desktop EXIT
-
-capture_desktop
-apply_desktop_policy
 
 # --- Build the RetroArch invocation ----------------------------------------
 
@@ -118,13 +70,10 @@ case "$SLOT" in
 esac
 
 cleanup_cfg() { [[ -n $appendcfg && -f $appendcfg ]] && rm -f "$appendcfg"; }
-restore_all() { cleanup_cfg; restore_desktop; }
-trap restore_all EXIT
+trap cleanup_cfg EXIT
 
 # A stop or Ctrl+C is meant for the game, not just for this script: hand the
-# signal on and keep waiting, so the desktop policy is only undone after
-# RetroArch has actually exited -- a session shutdown must not unsilence
-# notifications under a still-running game.
+# signal on and keep waiting so the launcher's status remains RetroArch's own.
 forward_signal() {
   [[ -n ${ra_pid:-} ]] && kill -s "$1" "$ra_pid" 2>/dev/null
   return 0

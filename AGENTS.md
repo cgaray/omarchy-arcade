@@ -17,10 +17,10 @@
 - `ArcadeSession.js` is the pure orchestration seam shared by both QML surfaces; keep process/timer objects and navigation in QML, and keep session functions Node-testable.
 - `bin/omarchy-arcade-scan` reads RetroArch playlists and emits one JSON document; playlist metadata is the library source. It forks jq once per playlist, streaming NUL-delimited fields, and its helpers return results through variables (`CORE_PATH`, `EXT`, `BOXART`, `STATE_INFO`) instead of stdout. Do not reintroduce per-ROM process spawns or `$( )` captures of these helpers: they cost ~7ms each and turned a 400-game scan from 150ms into seconds.
 - The scanner's `--fingerprint` intentionally excludes the thumbnail tree: art appearing for an existing game changes no file a scan reads, and the periodic rescan picks it up. Re-adding that walk re-creates the dominant cold-cache poll cost.
-- `bin/omarchy-arcade-launch` owns RetroArch invocation, desktop-state suppression/restoration, and playtime persistence. RetroArch runs in the background; INT/TERM are forwarded to it and restoration happens only after it exits, so a session shutdown cannot unsilence notifications under a live game. Its exit status propagates. Preserve that ordering and the trap-based restoration on normal exit, failure, and signals.
+- `bin/omarchy-arcade-launch` owns RetroArch invocation and playtime persistence. RetroArch runs in the background; INT/TERM are forwarded to it and its exit status propagates. Preserve that signal and status behavior.
 - Atomic writes (plays.json, added.json, cores.conf) go through a temp file created in the destination directory, so the final `mv` is an atomic rename. A `/tmp` tempfile makes it a cross-filesystem copy, which is exactly the truncation risk the pattern exists to prevent.
 - QML process commands use absolute paths. Plugin helpers resolve from `pluginDir`; Omarchy commands resolve from `$OMARCHY_PATH/bin` because detached processes do not inherit a login shell `PATH`.
-- When changing launch behavior, update both QML surfaces or move it into `ArcadeSession.launchRequest`; launch settings must stay consistent across surfaces.
+- When changing launch behavior, update both QML surfaces or move it into `ArcadeSession.launchRequest` so launch arguments stay consistent.
 
 ## Runtime Fixtures
 

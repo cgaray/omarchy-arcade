@@ -16,24 +16,21 @@ of cover art.
 
 ## Why this and not a game launcher
 
-A launcher lists games. Arcade is built around the twenty seconds *after* you
-decide to play — and around the desktop you are playing on top of.
+A launcher lists games. Arcade is built around getting back to the exact game
+you meant to play with as little ceremony as possible.
 
 - **Continue, not launch.** The top shelf is your save states, newest first,
   each showing the actual frame RetroArch captured when you saved. `Enter`
   resumes it. `f` starts the same game fresh.
-- **Notifications go quiet** for the length of the game and come back after —
-  including when the emulator crashes or is killed, because the restore waits
-  for RetroArch to actually exit.
-- **The screensaver stays away** during long cutscenes, then your idle setting
-  is put back.
-- **It restores what it found.** If you were already in do-not-disturb before
-  launching, you are still in it afterwards. Arcade only undoes what it did.
+- **Your library has memory.** The wall sorts by when games arrived, when you
+  last played, or when you last saved, and tracks session count and playtime.
+- **RetroArch stays authoritative.** Playlists, installed cores, save states,
+  and thumbnail art remain the source instead of being duplicated in Arcade.
 - **It is themed.** Arcade draws from the same tokens as the rest of the shell,
   so it already matches whatever theme you run.
 
-That middle group is the part a standalone launcher cannot do. It is the reason
-this is an Omarchy plugin and not another window.
+The result belongs in the shell because it is available where the decision to
+play happens, without another application window to manage.
 
 ## Two surfaces, one plugin
 
@@ -173,8 +170,6 @@ Configurable from the bar's widget settings, or inline in `shell.json`:
 | `watchRoms` | true | Notice new ROMs, save states, and playlist imports without waiting. |
 | `watchIntervalSec` | 10 | How often the cheap change-check runs. |
 | `maxLibraryRows` | 40 | Caps rendered rows in the bar panel; search still covers everything. |
-| `silenceNotifications` | true | Do-not-disturb for the length of the game. |
-| `stayAwake` | true | Suppress idle and the lock screen while playing. |
 
 ## Layout
 

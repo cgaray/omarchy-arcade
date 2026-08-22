@@ -219,20 +219,13 @@ Panel {
   // "f" key are the way back to a title screen.
   function launch(game, resume) {
     if (!game) return
-    var args = Session.launchRequest(game, root.sessionSettings(), resume,
+    var args = Session.launchRequest(game, resume,
       root.pluginDir + "/bin/omarchy-arcade-launch")
     root.close()
     Quickshell.execDetached(args)
     // The scan that follows the game is what moves it to the top of Continue,
     // so schedule one rather than waiting for the interval to come around.
     playPoll.restart()
-  }
-
-  function sessionSettings() {
-    return {
-      silenceNotifications: root.setting("silenceNotifications", true),
-      stayAwake: root.setting("stayAwake", true)
-    }
   }
 
   function activateCursor(resume) {
@@ -276,7 +269,7 @@ Panel {
     root.close()
     Quickshell.execDetached([
       root.omarchyBin + "/omarchy-shell", "-q", "shell", "summon", root.pluginId,
-      JSON.stringify({ system: root.systemFilter, settings: root.sessionSettings() })
+      JSON.stringify({ system: root.systemFilter })
     ])
   }
 

@@ -30,8 +30,6 @@
     "defaults": {
       "refreshIntervalSec": 300,
       "maxLibraryRows": 40,
-      "silenceNotifications": true,
-      "stayAwake": true,
       "watchRoms": true,
       "watchIntervalSec": 10
     },
@@ -55,20 +53,6 @@
         "step": 10,
         "defaultValue": 40,
         "description": "Caps rendered rows in the bar panel. Search still looks through the whole library."
-      },
-      {
-        "key": "silenceNotifications",
-        "type": "boolean",
-        "label": "Silence notifications while playing",
-        "defaultValue": true,
-        "description": "Enables do-not-disturb for the length of the game, then restores whatever it was before."
-      },
-      {
-        "key": "stayAwake",
-        "type": "boolean",
-        "label": "Suppress idle while playing",
-        "defaultValue": true,
-        "description": "Keeps the screensaver and lock screen away during long cutscenes, then restores your idle setting."
       },
       {
         "key": "watchRoms",

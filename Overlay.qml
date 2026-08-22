@@ -33,7 +33,6 @@ Item {
   property string systemFilter: ""
   property int selectedIndex: 0
   property bool cursorActive: false
-  property var sessionSettings: ({})
   property bool helpOpen: false
   property bool savedOnly: false
   property string sortMode: "name"
@@ -107,7 +106,6 @@ Item {
     root.savedOnly = false
     // The bar button can hand over the system you were already looking at.
     root.systemFilter = String(args.system || "")
-    if (args.settings) root.sessionSettings = args.settings
     root.selectedIndex = 0
     root.cursorActive = true
     root.helpOpen = false
@@ -229,7 +227,7 @@ Item {
 
   function launch(game, resume) {
     if (!game) return
-    var args = Session.launchRequest(game, root.sessionSettings, resume,
+    var args = Session.launchRequest(game, resume,
       root.pluginDir + "/bin/omarchy-arcade-launch")
     root.dismiss()
     Quickshell.execDetached(args)
