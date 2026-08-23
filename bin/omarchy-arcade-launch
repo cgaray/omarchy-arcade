@@ -69,11 +69,15 @@ case "$SLOT" in
     ;;
 esac
 
-cleanup_cfg() { [[ -n $appendcfg && -f $appendcfg ]] && rm -f "$appendcfg"; }
+# Trap callbacks run by way of the shell, not by name, so shellcheck reads
+# them as never invoked and their bodies as unreachable. Neither is true.
+# shellcheck disable=SC2317,SC2329
+cleanup_cfg() { [[ -n ${appendcfg:-} && -f $appendcfg ]] && rm -f "$appendcfg"; }
 trap cleanup_cfg EXIT
 
 # A stop or Ctrl+C is meant for the game, not just for this script: hand the
 # signal on and keep waiting so the launcher's status remains RetroArch's own.
+# shellcheck disable=SC2317,SC2329
 forward_signal() {
   [[ -n ${ra_pid:-} ]] && kill -s "$1" "$ra_pid" 2>/dev/null
   return 0
@@ -101,12 +105,26 @@ record_session() {
   # so an interrupted write cannot leave a truncated plays.json behind, which
   # would silently reset every playtime the user has accumulated.
   mkdir -p "$STATE_DIR"
-  [[ -f $PLAYS_FILE ]] || echo '{}' >"$PLAYS_FILE"
+  [[ -f $PLAYS_FILE ]] || printf '{}\n' >"$PLAYS_FILE"
 
   # Temp file lives beside plays.json so the final mv is a rename -- a /tmp
   # tempfile would make this a cross-filesystem copy, which is exactly the
   # interrupted-write truncation this dance exists to prevent.
-  tmp=$(mktemp "$STATE_DIR/.plays-XXXXXX.json") || return 0
+  #
+  # A lockfile serializes writers: two overlapping launches each performed an
+  # unsynchronized read-modify-write, and whichever mv landed last silently
+  # dropped the other session's stats.
+  local tmp lock_fd=9
+  exec {lock_fd}>"$STATE_DIR/.plays.lock" || return 0
+  if ! flock "$lock_fd"; then
+    exec {lock_fd}>&-
+    return 0
+  fi
+
+  tmp=$(mktemp "$STATE_DIR/.plays-XXXXXX.json") || {
+    exec {lock_fd}>&-
+    return 0
+  }
   if jq \
     --arg key "$ROM" \
     --argjson lastPlayed "$ended" \
@@ -120,8 +138,15 @@ record_session() {
   else
     rm -f "$tmp"
   fi
+  exec {lock_fd}>&-
 }
 
-record_session
+# Only completed sessions are recorded: a non-zero exit means the core died
+# before or during play, and counting crashes as sessions pollutes playtime
+# and every ordering built on it. A session cut short by a forwarded signal
+# is lost too -- accepted here, so crash loops stay out of the stats.
+if (( status == 0 )); then
+  record_session
+fi
 
 exit "$status"

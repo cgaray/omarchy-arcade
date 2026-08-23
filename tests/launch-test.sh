@@ -23,6 +23,7 @@ SCRIPT
 cat >"$FIXTURE/bin/retroarch" <<'SCRIPT'
 #!/bin/bash
 printf 'retroarch %s\n' "$*" >>"$FAKE_LOG"
+sleep "${FAKE_RETROARCH_SLEEP:-0}"
 exit "${FAKE_RETROARCH_STATUS:-0}"
 SCRIPT
 chmod +x "$FIXTURE/bin"/*
@@ -56,6 +57,16 @@ FAKE_RETROARCH_STATUS=7 run_launch
 status=$?
 check "emulator status is preserved" "7" "$status"
 
+plays_count() {
+  jq --arg k "$FIXTURE/game.rom" '.[$k].count // 0' \
+    "$FIXTURE/state/omarchy-arcade/plays.json" 2>/dev/null || echo 0
+}
+
+: >"$FIXTURE/calls.log"
+before=$(plays_count)
+FAKE_RETROARCH_STATUS=7 run_launch >/dev/null 2>&1
+check "a failed run leaves the recorded history untouched" "$before" "$(plays_count)"
+
 : >"$FIXTURE/calls.log"
 run_launch --slot 3
 check "numeric slots use entryslot" "1" "$(grep -c -- '--entryslot 3' "$FIXTURE/calls.log")"
@@ -68,8 +79,17 @@ check "auto slots use an appended config" "1" "$(grep -c -- '--appendconfig .*ar
 run_launch --slot 12 >/dev/null 2>&1
 check "invalid slots are rejected" "1" "$?"
 
+# Two overlapping sessions must both survive the read-modify-write; before
+# the plays.json lock, whichever mv landed last dropped the other's stats.
+: >"$FIXTURE/calls.log"
+c0=$(plays_count)
+FAKE_RETROARCH_SLEEP=0.4 run_launch >/dev/null 2>&1 & p1=$!
+FAKE_RETROARCH_SLEEP=0.4 run_launch >/dev/null 2>&1 & p2=$!
+wait "$p1" "$p2"
+check "overlapping launches both record their session" "$(( c0 + 2 ))" "$(plays_count)"
+
 if (( failures )); then
   echo "launch-test: $failures failed"
   exit 1
 fi
-echo "launch-test: 7 passed"
+echo "launch-test: 9 passed"
