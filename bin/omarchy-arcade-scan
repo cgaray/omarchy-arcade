@@ -188,6 +188,15 @@ emit_games() {
   RECORDS_FILE=$(mktemp -t omarchy-arcade-scan-XXXXXX.jsonl) || die "could not create scan records"
   trap 'rm -f "$RECORDS_FILE" "${ADDED_TMP:-}"' EXIT
 
+  # One enumeration at a time. The panel and the overlay each run this
+  # script, and overlapping invocations used to race through the same
+  # playlists and interleave added.json writers. Waiting costs milliseconds;
+  # serializing sends every caller home with complete, current output
+  # instead of inventing an exit-code contract for "another scan won".
+  mkdir -p "$STATE_DIR" || die "could not create state directory"
+  exec 9>>"$STATE_DIR/.scan.lock"
+  flock 9
+
   index_states
   load_cores || true
 
@@ -251,7 +260,6 @@ emit_games() {
   #   {"t":"game","g":{...}}        one per game
   #   {"t":"trailer",...}           extension table and meta
   local added_line="" saw_header=0 saw_trailer=0 game_count=0 line
-  mkdir -p "$STATE_DIR" || die "could not create state directory"
   ADDED_TMP=$(mktemp "$STATE_DIR/.added-XXXXXX.json") || die "could not create added-state temp file"
 
   while IFS= read -r line; do
@@ -416,6 +424,12 @@ add_game() {
 # the panel can poll it and only pay for a full rescan when something has
 # actually changed.
 #
+# From retroarch.cfg only the five resolved path keys are hashed, not the
+# file: RetroArch rewrites the whole config on nearly any GUI settings
+# change -- shaders, aspect ratio, input tweaks -- and none of that changes
+# what a scan would produce. The paths themselves are read once above, so a
+# genuine directory move still shows up here.
+#
 # Thumbnails are deliberately absent: art for an existing game appears only
 # when RetroArch downloads it, which changes no file a scan reads, and the
 # periodic rescan picks it up anyway. Walking tens of thousands of thumbnail
@@ -427,7 +441,8 @@ add_game() {
 # to keep alive across a shell restart. A 46ms find is none of those things.
 fingerprint() {
   {
-    [[ -f $RA_CFG ]] && { printf 'retroarch.cfg\t'; cat "$RA_CFG"; }
+    printf 'playlist_directory=%s\nsavestate_directory=%s\nthumbnails_directory=%s\nlibretro_directory=%s\nlibretro_info_path=%s\n' \
+      "$PLAYLIST_DIR" "$SAVESTATE_DIR" "$THUMBNAIL_DIR" "$CORE_DIR" "$INFO_DIR"
     find "$SAVESTATE_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' -printf '%T@\t%s\t%p\n' 2>/dev/null
