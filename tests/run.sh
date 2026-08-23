@@ -47,7 +47,7 @@ fi
 # covers that file instead.
 if command -v qmllint >/dev/null; then
   step "qmllint Library.js" qmllint "$ROOT/Library.js"
-  for qml in Overlay.qml ArcadeLibrary.qml PanelFooter.qml ScrollRail.qml SortPicker.qml ShortcutHelp.qml PanelFooter.qml KeyHintBar.qml GameTile.qml InspectorCard.qml ContinueRow.qml LibraryRow.qml; do
+  for qml in Overlay.qml ArcadeLibrary.qml PanelFooter.qml ScrollRail.qml SortPicker.qml ShortcutHelp.qml SystemStrip.qml KeyHintBar.qml GameTile.qml InspectorCard.qml ContinueRow.qml LibraryRow.qml; do
     step "qmllint $qml" qmllint -I /usr/share/omarchy/shell "$ROOT/$qml"
   done
 else

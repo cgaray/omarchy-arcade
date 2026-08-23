@@ -460,46 +460,17 @@ Item {
         }
 
         // --- Systems -----------------------------------------------------------
-        Flickable {
+        SystemStrip {
           width: parent.width
           visible: root.systems.length > 1 && !lib.retroarchMissing
-          height: visible ? systemRow.implicitHeight : 0
-          contentWidth: systemRow.implicitWidth
-          contentHeight: height
-          clip: true
-          flickableDirection: Flickable.HorizontalFlick
-          boundsBehavior: Flickable.StopAtBounds
-
-          Row {
-            id: systemRow
-            spacing: Style.space(6)
-
-            Button {
-              text: "All · " + root.games.length
-              selected: root.systemFilter === ""
-              bordered: true
-              foreground: root.foreground
-              accent: root.accent
-              fontFamily: root.fontFamily
-              fontSize: Style.font.bodySmall
-              onClicked: root.setSystem("")
-            }
-
-            Repeater {
-              model: root.systems
-              Button {
-                required property var modelData
-                text: modelData.label + " · " + modelData.count
-                selected: root.systemFilter === modelData.system
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                fontSize: Style.font.bodySmall
-                onClicked: root.setSystem(modelData.system)
-              }
-            }
-          }
+          systems: root.systems
+          gameCount: root.games.length
+          activeSystem: root.systemFilter
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          chipFontSize: Style.font.bodySmall
+          onSystemChosen: function (system) { root.setSystem(system) }
         }
 
         Item {

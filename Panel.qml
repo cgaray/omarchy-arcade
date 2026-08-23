@@ -19,7 +19,9 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color accent: Color.accent
   readonly property color urgent: bar ? bar.urgent : Color.urgent
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  // Same secondary-text treatment as the overlay: alpha over the theme
+  // foreground adapts to light and dark themes alike; darkening did not.
+  readonly property color dim: Util.alpha(foreground, 0.62)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   // Use one ID for plugin paths and shell commands.
@@ -424,15 +426,15 @@ Panel {
             title: "Arcade"
             meta: {
               if (lib.retroarchMissing) return "RetroArch is not installed"
-               if (lib.scanning && root.games.length === 0) return "Scanning your library…"
+              if (lib.scanning && root.games.length === 0) return "Scanning your library…"
               if (lib.loadError) return lib.loadError
               if (root.games.length === 0) return "No games found"
               var parts = [root.games.length + (root.games.length === 1 ? " game" : " games")]
               var resumable = root.resumableTotal
               if (resumable === 1) parts.push("1 with a save")
               else if (resumable > 0) parts.push(resumable + " with saves")
-               if (lib.scanning) parts.push("refreshing")
-               if (root.playing) parts.push("playing now")
+              if (lib.scanning) parts.push("refreshing")
+              if (root.playing) parts.push("playing now")
               return parts.join(" · ")
             }
             foreground: root.foreground
@@ -449,21 +451,21 @@ Panel {
             }
           }
 
-            Rectangle {
-              id: scanTrack
-              width: parent.width
-              height: Style.space(2)
-              visible: lib.scanning
-              color: Util.alpha(root.accent, 0.18)
-              clip: true
-              radius: height / 2
+          Rectangle {
+            id: scanTrack
+            width: parent.width
+            height: Style.space(2)
+            visible: lib.scanning
+            color: Util.alpha(root.accent, 0.18)
+            clip: true
+            radius: height / 2
 
-              Rectangle {
-                id: scanProgress
-                width: Math.max(Style.space(60), scanTrack.width * 0.28)
-                height: parent.height
-                radius: height / 2
-                color: root.accent
+            Rectangle {
+              id: scanProgress
+              width: Math.max(Style.space(60), scanTrack.width * 0.28)
+              height: parent.height
+              radius: height / 2
+              color: root.accent
 
               NumberAnimation on x {
                 from: -scanProgress.width
@@ -527,50 +529,20 @@ Panel {
           // --- Systems -------------------------------------------------------
           // Only worth showing once there is more than one system to move
           // between; a single-system library is already filtered.
-          Flickable {
-            id: systemStrip
+          SystemStrip {
             width: parent.width
             visible: root.systems.length > 1 && !lib.retroarchMissing
-            height: visible ? systemRow.implicitHeight : 0
-            contentWidth: systemRow.implicitWidth
-            contentHeight: height
-            clip: true
-            flickableDirection: Flickable.HorizontalFlick
-            boundsBehavior: Flickable.StopAtBounds
-
-            Row {
-              id: systemRow
-              spacing: Style.space(6)
-
-              Button {
-                text: "All · " + root.games.length
-                selected: root.systemFilter === ""
-                hasCursor: root.focusZone === "systems" && root.systemCursor === 0
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                fontSize: Style.font.caption
-                onClicked: { root.focusZone = "systems"; root.setSystem("") }
-              }
-
-              Repeater {
-                model: root.systems
-
-                Button {
-                  required property int index
-                  required property var modelData
-                  text: modelData.label + " · " + modelData.count
-                  selected: root.systemFilter === modelData.system
-                  hasCursor: root.focusZone === "systems" && root.systemCursor === index + 1
-                  bordered: true
-                  foreground: root.foreground
-                  accent: root.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  onClicked: { root.focusZone = "systems"; root.setSystem(modelData.system) }
-                }
-              }
+            systems: root.systems
+            gameCount: root.games.length
+            activeSystem: root.systemFilter
+            cursorIndex: root.focusZone === "systems" ? root.systemCursor : -1
+            foreground: root.foreground
+            accent: root.accent
+            fontFamily: root.fontFamily
+            chipFontSize: Style.font.caption
+            onSystemChosen: function (system) {
+              root.focusZone = "systems"
+              root.setSystem(system)
             }
           }
 
