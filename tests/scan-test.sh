@@ -378,6 +378,35 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
 }
 LPL
 
+# --- Field caps ----------------------------------------------------------------
+
+# Playlist metadata is user-editable text; every sourced field is capped while
+# records are built, so a pathological label cannot balloon a streamed record
+# -- or the model built from it.
+printf -v LONG_LABEL 'a%.0s' {1..8000}
+cat >"$FIXTURE/ra/playlists/Nintendo - Game Boy.lpl" <<LPL
+{
+  "version": "1.5",
+  "items": [
+    { "path": "$FIXTURE/roms/Pinball.gb", "label": "$LONG_LABEL", "core_path": "DETECT" }
+  ]
+}
+LPL
+out=$(scan_lib)
+check "an oversized label truncates instead of ballooning the record" \
+  "512" "$(jq --arg rom "$FIXTURE/roms/Pinball.gb" \
+           '[.games[] | select(.rom == $rom)][0].title | length' <<<"$out")"
+
+# Restore what later sections expect from this playlist.
+cat >"$FIXTURE/ra/playlists/Nintendo - Game Boy.lpl" <<LPL
+{
+  "version": "1.5",
+  "items": [
+    { "path": "$FIXTURE/roms/Pinball.gb", "label": "Pinball", "core_path": "DETECT" }
+  ]
+}
+LPL
+
 # --- Malformed playlist ------------------------------------------------------
 
 echo 'not json at all' >"$FIXTURE/ra/playlists/Broken.lpl"
@@ -444,6 +473,45 @@ check "newly discovered games receive a newer added date" \
   "true" "$([[ $later_added -gt $first_added ]] && echo true || echo false)"
 check "adding another game does not rewrite an existing added date" \
   "$first_added" "$(jq '.games[] | select(.title == "Super Mario World") | .addedAt' <<<"$out")"
+
+# --- Concurrent scans ----------------------------------------------------------
+
+# The panel and the overlay each run this script. Overlapping invocations
+# wait on a state-dir lock instead of racing through the same playlists and
+# interleaving added.json writers.
+run_scan >"$FIXTURE/concurrent-a.json" &
+scan_a=$!
+run_scan >"$FIXTURE/concurrent-b.json" &
+scan_b=$!
+wait "$scan_a" "$scan_b"
+
+check "the first concurrent scan streams to completion" \
+  "trailer" "$(tail -n1 "$FIXTURE/concurrent-a.json" | jq -r '.t')"
+check "the second concurrent scan streams to completion" \
+  "trailer" "$(tail -n1 "$FIXTURE/concurrent-b.json" | jq -r '.t')"
+
+check "concurrent scans agree on the library size" \
+  "$(collect_library <"$FIXTURE/concurrent-a.json" | jq '.games | length')" \
+  "$(collect_library <"$FIXTURE/concurrent-b.json" | jq '.games | length')"
+
+check "concurrent scans agree on first-discovered dates" \
+  "$(collect_library <"$FIXTURE/concurrent-a.json" | jq -S '.games | map(.addedAt)')" \
+  "$(collect_library <"$FIXTURE/concurrent-b.json" | jq -S '.games | map(.addedAt)')"
+
+# --- retroarch.cfg in the fingerprint ------------------------------------------
+
+# Only the five path keys a scan reads belong here. RetroArch rewrites the
+# whole config on nearly any GUI settings change, and none of that should
+# trigger rescans; a genuine directory move must. These checks run last
+# because appending a duplicate key re-points the fixture's own scans.
+before=$(fp)
+printf '\nvideo_shader = "none"\n' >>"$FIXTURE/ra/retroarch.cfg"
+check "unrelated retroarch.cfg edits do not change the fingerprint" \
+  "$before" "$(fp)"
+
+printf '\nplaylist_directory = "%s/x"\n' "$FIXTURE" >>"$FIXTURE/ra/retroarch.cfg"
+check "moving a directory a scan reads changes the fingerprint" \
+  "true" "$([[ $(fp) != "$before" ]] && echo true || echo false)"
 
 if (( failures )); then
   echo "scan-test: $passed passed, $failures failed"
