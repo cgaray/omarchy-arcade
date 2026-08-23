@@ -530,6 +530,7 @@ Panel {
           // Only worth showing once there is more than one system to move
           // between; a single-system library is already filtered.
           SystemStrip {
+            id: systemStrip
             width: parent.width
             visible: root.systems.length > 1 && !lib.retroarchMissing
             systems: root.systems

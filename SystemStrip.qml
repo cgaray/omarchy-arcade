@@ -22,6 +22,9 @@ Flickable {
 
   contentWidth: row.implicitWidth
   contentHeight: row.implicitHeight
+  // A Flickable sizes to nothing on its own; without this the strip
+  // participates in the column layout at zero pixels tall.
+  height: row.implicitHeight
   clip: true
   flickableDirection: Flickable.HorizontalFlick
   boundsBehavior: Flickable.StopAtBounds
