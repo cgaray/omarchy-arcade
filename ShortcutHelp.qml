@@ -32,7 +32,7 @@ BorderSurface {
 
     Text {
       width: parent.width
-      text: "↑↓←→ or hjkl move    Enter resume    Shift+Enter / right-click start over    type search\nCtrl+S saved states    Tab / Shift+Tab systems    Ctrl+0 all, Ctrl+1..9 jump system    F5 refresh    Ctrl+Backspace clear    Esc back"
+      text: "↑↓←→ move (PageUp/PageDown by row)    Enter resume    Shift+Enter / right-click start over    type search\nCtrl+S saved states    Tab / Shift+Tab systems    Ctrl+0 all, Ctrl+1..9 jump system    F5 refresh    Ctrl+Backspace clear    Esc back"
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption

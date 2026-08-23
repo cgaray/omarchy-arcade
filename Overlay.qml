@@ -334,18 +334,6 @@ Item {
           } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_S) {
             root.setSavedOnly(!root.savedOnly)
             event.accepted = true
-          } else if (!event.modifiers && event.text === "j") {
-            root.move(0, 1)
-            event.accepted = true
-          } else if (!event.modifiers && event.text === "k") {
-            root.move(0, -1)
-            event.accepted = true
-          } else if (!event.modifiers && event.text === "h") {
-            root.move(-1, 0)
-            event.accepted = true
-          } else if (!event.modifiers && event.text === "l") {
-            root.move(1, 0)
-            event.accepted = true
           } else if (event.text === "?") {
             root.helpOpen = !root.helpOpen
             event.accepted = true
