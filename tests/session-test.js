@@ -125,4 +125,28 @@ assert.strictEqual(Session.nextSystem([], "SNES", 1), "SNES")
 assert.strictEqual(Session.nextSystem([{ system: "NES" }], "", 1), "NES")
 assert.strictEqual(Session.nextSystem([{ system: "NES" }], "NES", -1), "")
 
+// Headers promise what the filters selected, not what the cap rendered.
+const capped = Session.rebuild([
+  game({ title: "Alpha" }),
+  game({ key: "/b", rom: "/b", title: "Alfa" }),
+  game({ key: "/c", rom: "/c", title: "Also Alphabetic" })
+], "al", "", 2, 0)
+assert.strictEqual(capped.libraryRows.length, 2)
+assert.strictEqual(capped.totalMatches, 3)
+
+// Browsing counts the narrowed pool, not the whole library.
+const pool = [
+  game({ key: "/s1", rom: "/s1", system: "SNES" }),
+  game({ key: "/n1", rom: "/n1", system: "NES" }),
+  game({ key: "/n2", rom: "/n2", system: "NES" })
+]
+assert.strictEqual(Session.rebuild(pool, "", "", 40, 0).totalMatches, 3)
+assert.strictEqual(Session.rebuild(pool, "", "NES", 40, 0).totalMatches, 2)
+const savable = [
+  game({ key: "/r", rom: "/r", resumeAt: 5, resumeSlot: "0" }),
+  game({ key: "/x", rom: "/x" })
+]
+assert.strictEqual(
+  Session.rebuild(savable, "", "", 40, 0, true).totalMatches, 1)
+
 console.log("session-test: 13 passed")

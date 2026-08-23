@@ -216,7 +216,7 @@ function systemsOf(games) {
   return out
 }
 
-function filterGames(games, query, limit, system) {
+function filterGames(games, query, limit, system, tally) {
   var all = games || []
   var max = limit || 500
   var q = String(query || "").trim().toLowerCase()
@@ -232,7 +232,10 @@ function filterGames(games, query, limit, system) {
     }
   }
 
-  if (!q.length) return list.slice(0, max)
+  if (!q.length) {
+    if (tally) tally.matches = list.length
+    return list.slice(0, max)
+  }
 
   var scored = []
   for (var i = 0; i < list.length; i++) {
@@ -256,6 +259,7 @@ function filterGames(games, query, limit, system) {
     return a.order - b.order
   })
 
+  if (tally) tally.matches = scored.length
   var out = []
   for (var j = 0; j < scored.length && j < max; j++) out.push(scored[j].game)
   return out

@@ -40,6 +40,7 @@ Item {
   property var games: []
   property var extensions: []
   property var visibleGames: []
+  property int totalMatches: 0
   property string loadError: ""
   property double nowSeconds: 0
 
@@ -136,6 +137,7 @@ Item {
     var derived = Session.rebuild(root.games, root.filterText, root.systemFilter, 2000, 0, root.savedOnly, root.sortMode)
     root.systemFilter = derived.systemFilter
     root.visibleGames = derived.libraryRows
+    root.totalMatches = derived.totalMatches
     root.systems = derived.systems
     if (root.selectedIndex >= root.visibleGames.length)
       root.selectedIndex = Math.max(0, root.visibleGames.length - 1)
@@ -400,8 +402,11 @@ Item {
                   if (lib.loadError) return lib.loadError
                   if (lib.scanning && root.games.length === 0) return "Scanning…"
                   if (lib.scanning) return "Refreshing library…"
-                  return root.visibleGames.length
-                    + (root.visibleGames.length === 1 ? " game" : " games")
+                  var shown = root.visibleGames.length
+                  var base = shown === root.totalMatches
+                    ? shown + (shown === 1 ? " game" : " games")
+                    : "first " + shown + " of " + root.totalMatches + " games"
+                  return base
                     + (root.systemFilter ? " · " + root.systemFilter : "")
                     + (root.savedOnly ? " · saves" : "")
                 }

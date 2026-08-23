@@ -33,7 +33,13 @@ function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly, s
     if (!present) wanted = ""
   }
 
-  var rows = Library.filterGames(list, query, libraryLimit, wanted)
+  // The count the headers should promise: everything the current filters
+  // select, before the display cap trims what is actually rendered.
+  // filterGames tallies both paths -- scored matches under a query, the
+  // narrowed pool while browsing.
+  var tally = {}
+  var rows = Library.filterGames(list, query, libraryLimit, wanted, tally)
+  var totalMatches = tally.matches
   var mode = String(sortMode || "")
   if (mode) {
     rows.sort(function (a, b) {
@@ -61,6 +67,7 @@ function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly, s
     systemFilter: wanted,
     continueRows: (!query && continueLimit > 0) ? Library.resumableIn(list, wanted, continueLimit) : [],
     libraryRows: rows,
+    totalMatches: totalMatches,
     systems: systems,
     resumableTotal: resumableTotal
   }

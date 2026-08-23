@@ -47,6 +47,9 @@ Panel {
   property string systemFilter: ""
   property var systems: []
   property int resumableTotal: 0
+  // Everything the current filters select, before maxLibraryRows trims the
+  // rendered rows -- so a header can say "first 40 of 87" honestly.
+  property int totalMatches: 0
   // A Dropdown popup takes the keyboard while it is open; the panel's own
   // cursor keys would otherwise move the selection behind it.
   property bool dropdownOpen: false
@@ -143,6 +146,7 @@ Panel {
     root.systemFilter = derived.systemFilter
     root.continueRows = derived.continueRows
     root.libraryRows = derived.libraryRows
+    root.totalMatches = derived.totalMatches
     root.systems = derived.systems
     root.resumableTotal = derived.resumableTotal
     if (root.cursorIndex >= root.cursorTargets.length)
@@ -632,8 +636,13 @@ Panel {
             width: parent.width
             visible: root.libraryRows.length > 0
             text: {
-              if (root.query)
-                return root.libraryRows.length + " match" + (root.libraryRows.length === 1 ? "" : "es")
+              if (root.query) {
+                var total = root.totalMatches
+                var shown = root.libraryRows.length
+                if (shown >= total)
+                  return total + " match" + (total === 1 ? "" : "es")
+                return "First " + shown + " of " + total + " matches"
+              }
               if (root.systemFilter) return root.systemFilter
               return "Library"
             }
