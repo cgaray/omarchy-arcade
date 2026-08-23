@@ -109,7 +109,7 @@ Panel {
       ? cursorTargets[Math.max(0, Math.min(cursorIndex, cursorTargets.length - 1))]
       : null
 
-  function targetKey(kind, game) { return kind + ":" + (game ? game.key : "") }
+  function targetKey(kind, game) { return kind + ":" + (game ? game.rom : "") }
   function selectedKey() { return selectedTarget ? targetKey(selectedTarget.kind, selectedTarget.game) : "" }
 
   // Keep the selected row inside the visible panel area.

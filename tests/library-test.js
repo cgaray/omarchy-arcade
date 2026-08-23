@@ -117,6 +117,19 @@ test("a stream without its trailer is incomplete, not empty", () => {
   assert.strictEqual(r.games.length, 0)
 })
 
+// The scanner restates the ROM path as `key`; storing both doubled every
+// row's path string in the long-lived model.
+test("a key that only restates the ROM path is not retained", () => {
+  const r = feed([headerLine(1), gameLine(Object.assign({}, game(), { key: "/roms/a.sfc" })), trailerLine()])
+  assert.ok(!("key" in r.games[0]), "expected no duplicate key field")
+  assert.strictEqual(r.games[0].rom, "/roms/a.sfc")
+})
+
+test("a key genuinely distinct from the ROM path survives", () => {
+  const r = feed([headerLine(1), gameLine(game({ key: "mame:slugs" })), trailerLine()])
+  assert.strictEqual(r.games[0].key, "mame:slugs")
+})
+
 test("unrecognised tags and blank lines are skipped, not fatal", () => {
   const r = feed([
     "",

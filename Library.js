@@ -10,25 +10,42 @@
 // Normalize one scanner game record into the row shape every view reads.
 // Entries with nowhere to run are dropped here, at the edge, rather than
 // leaking into filters and shelves downstream.
-function normalizeGame(g) {
+//
+// Rows live in the shell for its whole uptime, so normalization interns
+// low-cardinality strings -- system names, core paths, empty art -- through
+// a per-builder pool. The engine keeps no dedup across JSON.parse, so an
+// un-interned library stored its dozen distinct system names once per game;
+// sharing them is most of what a row costs beyond the title and ROM path.
+function normalizeGame(g, pool) {
   if (!g || !g.rom || !g.core) return null
-  return {
-    key: String(g.key || g.rom),
+
+  var rom = String(g.rom)
+  var interned = function (v) {
+    var s = String(v == null ? "" : v)
+    return pool[s] || (pool[s] = s)
+  }
+
+  var system = interned(g.system)
+  var core = interned(g.core)
+  var row = {
     title: prettyTitle(g.title),
-    system: String(g.system || ""),
-    sysKey: systemKey(g),
-    core: String(g.core),
-    coreName: String(g.coreName || ""),
-    rom: String(g.rom),
-    art: String(g.art || ""),
-    resumeSlot: String(g.resumeSlot || ""),
-    resumeArt: String(g.resumeArt || ""),
+    system: system,
+    sysKey: interned(shortSystem(system)),
+    core: core,
+    coreName: interned(g.coreName),
+    rom: rom,
+    art: interned(g.art),
+    resumeSlot: interned(g.resumeSlot),
+    resumeArt: interned(g.resumeArt),
     resumeAt: Number(g.resumeAt || 0),
     addedAt: Number(g.addedAt || 0),
     lastPlayed: Number(g.lastPlayed || 0),
     playSeconds: Number(g.playSeconds || 0),
     playCount: Number(g.playCount || 0)
   }
+  // `key` was always the ROM path restated; views identify rows by `rom`.
+  if (g.key && String(g.key) !== rom) row.key = String(g.key)
+  return row
 }
 
 function normalizeExtensions(list) {
@@ -47,17 +64,38 @@ function normalizeExtensions(list) {
   return out
 }
 
+// Ceilings keeping a large or malformed library from exhausting the
+// long-lived shell. Streaming removed the whole-document text buffer, but
+// the parsed rows stay resident -- that is what browsing needs -- so the
+// builder bounds what it will retain: no single record above maxRecordBytes,
+// and nothing beyond maxTotalBytes of stream in total (roughly 150k games;
+// every real library sits far below). The scanner caps its own fields too,
+// which bounds each emitted line at the source. Override point exists for
+// tests.
+var SCAN_LIMITS = {
+  maxRecordBytes: 64 * 1024,
+  maxTotalBytes: 64 * 1024 * 1024
+}
+
 // Streaming counterpart to omarchy-arcade-scan's tagged NDJSON output. Feed
 // lines to addLine as they arrive -- the caller never holds the library as
 // text, only structured rows -- and finish() returns what the views read,
 // including an explicit error when the stream never became a library.
-function createScanBuilder() {
+function createScanBuilder(limits) {
+  var maxRecord = (limits && limits.maxRecordBytes) || SCAN_LIMITS.maxRecordBytes
+  var maxTotal = (limits && limits.maxTotalBytes) || SCAN_LIMITS.maxTotalBytes
+  // Prototype-free, so a string value can never collide with an inherited
+  // property name during interning.
+  var pool = Object.create(null)
+
   return {
     games: [],
     extensions: [],
     meta: {},
     error: "",
     _lines: 0,
+    _bytes: 0,
+    _stopped: false,
     _sawHeader: false,
     _sawTrailer: false,
 
@@ -65,15 +103,29 @@ function createScanBuilder() {
       var line = String(raw == null ? "" : raw).trim()
       if (!line.length) return
       this._lines += 1
+      this._bytes += line.length
+
+      // A record nobody should ever produce is skipped rather than kept:
+      // one malformed line costs its own entry, not the library.
+      if (line.length > maxRecord) {
+        this.error = this.error || "a scanner record exceeded the size limit"
+        return
+      }
+      // Past the total ceiling the stream stops contributing rows but keeps
+      // being consumed, so the trailer still arrives and finish() can report
+      // the real cause rather than a mere "incomplete".
+      if (this._bytes > maxTotal)
+        this._stopped = true
+
       var msg
       try {
         msg = JSON.parse(line)
       } catch (e) {
-        this.error = "scanner output was not JSON"
+        this.error = this.error || "scanner output was not JSON"
         return
       }
       if (!msg || typeof msg !== "object" || typeof msg.t !== "string") {
-        this.error = "scanner output was not JSON"
+        this.error = this.error || "scanner output was not JSON"
         return
       }
       // Unrecognised tags are ignored rather than fatal: the protocol grows
@@ -81,18 +133,24 @@ function createScanBuilder() {
       if (msg.t === "header") {
         this._sawHeader = true
       } else if (msg.t === "game") {
-        var row = normalizeGame(msg.g)
+        if (this._stopped) return
+        var row = normalizeGame(msg.g, pool)
         if (row) this.games.push(row)
       } else if (msg.t === "trailer") {
         this._sawTrailer = true
-        this.extensions = normalizeExtensions(msg.extensions)
-        this.meta = msg.meta && typeof msg.meta === "object" ? msg.meta : {}
+        if (!this._stopped) {
+          this.extensions = normalizeExtensions(msg.extensions)
+          this.meta = msg.meta && typeof msg.meta === "object" ? msg.meta : {}
+        }
       }
     },
 
     finish: function () {
       if (this._lines === 0)
         return { games: [], extensions: [], meta: {}, error: "scanner produced no output" }
+      if (this._stopped)
+        return { games: this.games, extensions: this.extensions, meta: this.meta,
+                 error: this.error || "library exceeded the size limit" }
       if (!this._sawHeader || !this._sawTrailer)
         return { games: [], extensions: [], meta: {}, error: "scanner output was incomplete" }
       return { games: this.games, extensions: this.extensions, meta: this.meta, error: this.error }

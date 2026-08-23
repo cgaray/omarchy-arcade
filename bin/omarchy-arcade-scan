@@ -289,10 +289,13 @@ emit_games() {
       | if .[-1] == "" then .[:-1] else . end
       | [range(0; length; 11) as $i
         | {
-            key: .[$i], title: .[$i + 1], system: .[$i + 2], ext: .[$i + 3],
-            core: .[$i + 4], coreName: .[$i + 5], rom: .[$i + 6], art: .[$i + 7],
-            resumeSlot: .[$i + 8], resumeAt: (.[ $i + 9 ] | tonumber),
-            resumeArt: .[$i + 10]
+            key: (.[$i] | .[0:4096]), title: (.[$i + 1] | .[0:512]),
+            system: (.[$i + 2] | .[0:512]), ext: (.[$i + 3] | .[0:64]),
+            core: (.[$i + 4] | .[0:4096]), coreName: (.[$i + 5] | .[0:512]),
+            rom: (.[$i + 6] | .[0:4096]), art: (.[$i + 7] | .[0:4096]),
+            resumeSlot: (.[$i + 8] | .[0:16]),
+            resumeAt: ((.[$i + 9] | .[0:32]) | tonumber),
+            resumeArt: (.[$i + 10] | .[0:4096])
           }])
     | map(. as $game
       | ($plays[$game.rom] // {}) as $play

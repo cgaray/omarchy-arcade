@@ -79,10 +79,10 @@ const groupGames = [
   game({ key: "/roms/a.nes", rom: "/roms/a.nes", title: "A", system: "NES" })
 ]
 assert.deepStrictEqual(
-  Session.rebuild(groupGames, "", "", 40, 6).libraryRows.map((g) => g.key),
+  Session.rebuild(groupGames, "", "", 40, 6).libraryRows.map((g) => g.rom),
   ["/roms/a.nes", "/roms/b.nes", "/roms/z.sfc"])
 assert.deepStrictEqual(
-  Session.rebuild(groupGames, "zed", "", 40, 0).libraryRows.map((g) => g.key),
+  Session.rebuild(groupGames, "zed", "", 40, 0).libraryRows.map((g) => g.rom),
   ["/roms/z.sfc"])
 
 // Display helpers ride the same seam so views need no second import.
