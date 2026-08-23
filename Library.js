@@ -7,64 +7,96 @@
 
 .pragma library
 
-// Parse the JSON that omarchy-arcade-scan writes to stdout. A scanner that
-// crashed or printed a warning is indistinguishable from one that found no
-// games unless we tell them apart here, so a parse failure returns an explicit
-// `error` rather than an innocent empty library.
-function parseLibrary(raw) {
-  var text = String(raw || "").trim()
-  if (!text.length)
-    return { games: [], extensions: [], meta: {}, error: "scanner produced no output" }
-
-  var parsed
-  try {
-    parsed = JSON.parse(text)
-  } catch (e) {
-    return { games: [], extensions: [], meta: {}, error: "scanner output was not JSON" }
+// Normalize one scanner game record into the row shape every view reads.
+// Entries with nowhere to run are dropped here, at the edge, rather than
+// leaking into filters and shelves downstream.
+function normalizeGame(g) {
+  if (!g || !g.rom || !g.core) return null
+  return {
+    key: String(g.key || g.rom),
+    title: prettyTitle(g.title),
+    system: String(g.system || ""),
+    sysKey: systemKey(g),
+    core: String(g.core),
+    coreName: String(g.coreName || ""),
+    rom: String(g.rom),
+    art: String(g.art || ""),
+    resumeSlot: String(g.resumeSlot || ""),
+    resumeArt: String(g.resumeArt || ""),
+    resumeAt: Number(g.resumeAt || 0),
+    addedAt: Number(g.addedAt || 0),
+    lastPlayed: Number(g.lastPlayed || 0),
+    playSeconds: Number(g.playSeconds || 0),
+    playCount: Number(g.playCount || 0)
   }
+}
 
-  var games = Array.isArray(parsed.games) ? parsed.games : []
-  var normalized = []
-  for (var i = 0; i < games.length; i++) {
-    var g = games[i]
-    if (!g || !g.rom || !g.core) continue
-    normalized.push({
-      key: String(g.key || g.rom),
-      title: prettyTitle(g.title),
-      system: String(g.system || ""),
-      sysKey: systemKey(g),
-      core: String(g.core),
-      coreName: String(g.coreName || ""),
-      rom: String(g.rom),
-      art: String(g.art || ""),
-      resumeSlot: String(g.resumeSlot || ""),
-      resumeArt: String(g.resumeArt || ""),
-      resumeAt: Number(g.resumeAt || 0),
-      addedAt: Number(g.addedAt || 0),
-      lastPlayed: Number(g.lastPlayed || 0),
-      playSeconds: Number(g.playSeconds || 0),
-      playCount: Number(g.playCount || 0)
-    })
-  }
-
-  var extensions = Array.isArray(parsed.extensions) ? parsed.extensions : []
-  var normalizedExts = []
-  for (var k = 0; k < extensions.length; k++) {
-    var e = extensions[k]
+function normalizeExtensions(list) {
+  var exts = Array.isArray(list) ? list : []
+  var out = []
+  for (var k = 0; k < exts.length; k++) {
+    var e = exts[k]
     if (!e || !e.ext) continue
-    normalizedExts.push({
+    out.push({
       ext: String(e.ext),
       candidates: Array.isArray(e.candidates) ? e.candidates : [],
       chosen: String(e.chosen || ""),
       resolved: String(e.resolved || "")
     })
   }
+  return out
+}
 
+// Streaming counterpart to omarchy-arcade-scan's tagged NDJSON output. Feed
+// lines to addLine as they arrive -- the caller never holds the library as
+// text, only structured rows -- and finish() returns what the views read,
+// including an explicit error when the stream never became a library.
+function createScanBuilder() {
   return {
-    games: normalized,
-    extensions: normalizedExts,
-    meta: parsed.meta || {},
-    error: ""
+    games: [],
+    extensions: [],
+    meta: {},
+    error: "",
+    _lines: 0,
+    _sawHeader: false,
+    _sawTrailer: false,
+
+    addLine: function (raw) {
+      var line = String(raw == null ? "" : raw).trim()
+      if (!line.length) return
+      this._lines += 1
+      var msg
+      try {
+        msg = JSON.parse(line)
+      } catch (e) {
+        this.error = "scanner output was not JSON"
+        return
+      }
+      if (!msg || typeof msg !== "object" || typeof msg.t !== "string") {
+        this.error = "scanner output was not JSON"
+        return
+      }
+      // Unrecognised tags are ignored rather than fatal: the protocol grows
+      // forward, and an older reader skips what it does not know.
+      if (msg.t === "header") {
+        this._sawHeader = true
+      } else if (msg.t === "game") {
+        var row = normalizeGame(msg.g)
+        if (row) this.games.push(row)
+      } else if (msg.t === "trailer") {
+        this._sawTrailer = true
+        this.extensions = normalizeExtensions(msg.extensions)
+        this.meta = msg.meta && typeof msg.meta === "object" ? msg.meta : {}
+      }
+    },
+
+    finish: function () {
+      if (this._lines === 0)
+        return { games: [], extensions: [], meta: {}, error: "scanner produced no output" }
+      if (!this._sawHeader || !this._sawTrailer)
+        return { games: [], extensions: [], meta: {}, error: "scanner output was incomplete" }
+      return { games: this.games, extensions: this.extensions, meta: this.meta, error: this.error }
+    }
   }
 }
 
@@ -392,7 +424,7 @@ function highlightTitle(raw, query, accent) {
 // Node (tests) reaches the same functions the QML `.import` reaches.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    parseLibrary: parseLibrary,
+    createScanBuilder: createScanBuilder,
     prettyTitle: prettyTitle,
     shortSystem: shortSystem,
     systemAndCore: systemAndCore,

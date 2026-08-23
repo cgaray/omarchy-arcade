@@ -12,6 +12,7 @@ ADDED_FILE="$STATE_DIR/added.json"
 CORES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/arcade/cores.conf"
 INFO_DIR=""
 RECORDS_FILE=""
+ADDED_TMP=""
 
 die() {
   echo "omarchy-arcade-scan: $*" >&2
@@ -185,7 +186,7 @@ boxart_for() {
 emit_games() {
   local playlist_count=0
   RECORDS_FILE=$(mktemp -t omarchy-arcade-scan-XXXXXX.jsonl) || die "could not create scan records"
-  trap 'rm -f "$RECORDS_FILE"' EXIT
+  trap 'rm -f "$RECORDS_FILE" "${ADDED_TMP:-}"' EXIT
 
   index_states
   load_cores || true
@@ -241,10 +242,43 @@ emit_games() {
   local now
   now=$(date +%s)
 
-  # Read records from the scan file to keep the command line small. The first
-  # document is the persistent first-seen index; the second is scanner output.
-  local -a documents=()
-  mapfile -t documents < <(jq -Rsc --argjson plays "$plays_json" \
+  # Stream tagged NDJSON out of jq one line at a time instead of assembling a
+  # single document: every line is handed to whoever is reading as it is
+  # produced, so neither this script nor the long-lived shell ever holds the
+  # whole library as text. Line protocol, in emission order:
+  #   {"t":"added","state":{...}}   first-seen index, consumed internally
+  #   {"t":"header","games":N}
+  #   {"t":"game","g":{...}}        one per game
+  #   {"t":"trailer",...}           extension table and meta
+  local added_line="" saw_header=0 saw_trailer=0 game_count=0 line
+  mkdir -p "$STATE_DIR" || die "could not create state directory"
+  ADDED_TMP=$(mktemp "$STATE_DIR/.added-XXXXXX.json") || die "could not create added-state temp file"
+
+  while IFS= read -r line; do
+    case $line in
+      '{"t":"added",'*)
+        # The only tag held back: the first-seen index is persisted below,
+        # after the stream has proven complete, and never reaches stdout.
+        added_line=$line
+        ;;
+      '{"t":"header",'*)
+        saw_header=1
+        printf '%s\n' "$line"
+        ;;
+      '{"t":"game",'*)
+        game_count=$((game_count + 1))
+        printf '%s\n' "$line"
+        ;;
+      '{"t":"trailer",'*)
+        saw_trailer=1
+        printf '%s\n' "$line"
+        ;;
+      *)
+        # An unrecognised tag is skipped rather than forwarded or fatal, so
+        # the protocol can grow without breaking an older reader mid-scan.
+        ;;
+    esac
+  done < <(jq -c -Rsc --argjson plays "$plays_json" \
     --argjson added "$added_json" \
     --argjson now "$now" \
     --argjson cores "$CORES_JSON" \
@@ -272,40 +306,49 @@ emit_games() {
           if has($game.rom) then . else .[$game.rom] = $now end)) as $nextAdded
      | ($sorted | map(. + {addedAt: (($nextAdded[.rom] // $now) | floor)})) as $dated
      | ($dated | map(.ext) | unique | map(select(. != ""))) as $exts
-     | $nextAdded, {
-         games: $dated,
-         extensions: [
-           $exts[]
-           | . as $e
-           | (($cores.cores // []) | map(select(.extensions | index($e)))) as $cands
-           | {
-               ext: $e,
-               candidates: [ $cands[] | { id: .id, name: .corename, system: .system } ],
-               chosen: ((($cores.choices // {})[$e]) // ""),
-               resolved: (($dated | map(select(.ext == $e)) | first | .coreName) // "")
-             }
-         ],
-         meta: {
+     | {t: "added", state: $nextAdded},
+       {t: "header", games: ($dated | length)},
+       ($dated[] | {t: "game", g: .}),
+       {t: "trailer",
+          extensions: [
+            $exts[]
+            | . as $e
+            | (($cores.cores // []) | map(select(.extensions | index($e)))) as $cands
+            | {
+                ext: $e,
+                candidates: [ $cands[] | { id: .id, name: .corename, system: .system } ],
+                chosen: ((($cores.choices // {})[$e]) // ""),
+                resolved: (($dated | map(select(.ext == $e)) | first | .coreName) // "")
+              }
+          ],
+          meta: {
             playlistDir: $playlistDir,
-           fromPlaylists: $fromPlaylists,
+            fromPlaylists: $fromPlaylists,
             retroarchInstalled: $retroarch,
-           coreCount: ((($cores.meta // {}).coreCount) // 0)
-         }
-         }' "$RECORDS_FILE")
+            coreCount: ((($cores.meta // {}).coreCount) // 0)
+          }}' "$RECORDS_FILE")
 
-  [[ ${#documents[@]} -eq 2 ]] || die "could not build library output"
-  if [[ ${documents[0]} != "$added_json" ]]; then
-    mkdir -p "$STATE_DIR" || die "could not create state directory"
-    local added_tmp
-    added_tmp=$(mktemp "$STATE_DIR/.added-XXXXXX.json") || die "could not create added-state temp file"
-    if printf '%s\n' "${documents[0]}" >"$added_tmp"; then
-      mv -f "$added_tmp" "$ADDED_FILE"
-    else
-      rm -f "$added_tmp"
+  # Fail closed on an incomplete stream rather than emitting something that
+  # looks like an empty library because jq died partway through.
+  (( saw_header && saw_trailer )) || die "could not build library output"
+  if (( game_count != playlist_count )); then
+    die "lost $((playlist_count - game_count)) games building library output"
+  fi
+
+  # First-seen dates persist only when they changed, and only once the stream
+  # finished cleanly: an interrupted scan must never truncate them.
+  if [[ -n $added_line && $added_line != "{\"t\":\"added\",\"state\":${added_json}}" ]]; then
+    if ! jq -c '.state' <<<"$added_line" >"$ADDED_TMP" 2>/dev/null; then
+      rm -f "$ADDED_TMP"
+      ADDED_TMP=""
       die "could not persist added dates"
     fi
+    mv -f "$ADDED_TMP" "$ADDED_FILE"
+    ADDED_TMP=""
+  else
+    rm -f "$ADDED_TMP"
+    ADDED_TMP=""
   fi
-  printf '%s\n' "${documents[1]}"
 }
 
 effective_ext() {
@@ -400,8 +443,10 @@ case "${1:-}" in
     cat <<USAGE
 Usage: omarchy-arcade-scan [--fingerprint]
 
-Prints the Arcade game library as JSON on stdout:
-  { "games": [ ... ], "extensions": [ ... ], "meta": { ... } }
+Prints the Arcade game library to stdout as tagged newline-delimited
+JSON, one object per line, streamed as it is built:
+  {"t":"header",...} {"t":"game","g":{...}}* {"t":"trailer",...}
+The first-seen index line is consumed internally and never printed.
 
   --fingerprint  Print a short signature of the ROM tree, save states,
                  playlists, and core choices instead. Changes whenever a full

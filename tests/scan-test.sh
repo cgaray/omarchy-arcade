@@ -73,6 +73,22 @@ run_scan() {
   "$SCAN"
 }
 
+# The scanner streams tagged NDJSON rather than one document. Reassemble that
+# into the single object most assertions below were written against, and pin
+# the wire format itself with dedicated checks.
+collect_library() {
+  jq -cs '
+    map(select(.t == "game") | .g) as $games
+    | (map(select(.t == "trailer")) | first // {}) as $tail
+    | { games: $games,
+        extensions: ($tail.extensions // []),
+        meta: ($tail.meta // {}) }'
+}
+
+scan_lib() {
+  run_scan | collect_library
+}
+
 # --- Playlist source ---------------------------------------------------------
 
 cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" <<LPL
@@ -93,10 +109,27 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Game Boy.lpl" <<LPL
 }
 LPL
 
-out=$(run_scan) || { echo "FAIL: scanner exited non-zero"; exit 1; }
+raw=$(run_scan) || { echo "FAIL: scanner exited non-zero"; exit 1; }
 
+out=$(collect_library <<<"$raw")
 jq -e . >/dev/null 2>&1 <<<"$out" || { echo "FAIL: scanner did not emit valid JSON"; exit 1; }
 passed=$((passed + 1))
+
+stream_json_ok=true
+while IFS= read -r stream_line; do
+  jq -e . >/dev/null 2>&1 <<<"$stream_line" || { stream_json_ok=false; break; }
+done <<<"$raw"
+check "every line of the stream is valid JSON" "true" "$stream_json_ok"
+
+check "the stream opens with a header" \
+  "header" "$(sed -n '1p' <<<"$raw" | jq -r '.t')"
+
+check "the added-state document never reaches stdout" \
+  "0" "$(grep -c '"t":"added"' <<<"$raw" || true)"
+
+check "the stream frames exactly the games it carries" \
+  "$(( $(jq '.games | length' <<<"$out") + 2 ))" \
+  "$(wc -l <<<"$raw" | tr -d ' ')"
 
 check "playlist entries form the library" \
   "3" "$(jq '.games | length' <<<"$out")"
@@ -126,7 +159,7 @@ first_added=$(jq '.games[] | select(.title == "Super Mario World") | .addedAt' <
 check "games receive a first-discovered timestamp" \
   "true" "$([[ $first_added -gt 0 ]] && echo true || echo false)"
 
-out=$(run_scan)
+out=$(scan_lib)
 check "the first-discovered timestamp survives later scans" \
   "$first_added" "$(jq '.games[] | select(.title == "Super Mario World") | .addedAt' <<<"$out")"
 
@@ -138,7 +171,7 @@ check "added dates are persisted as valid JSON state" \
 
 touch "$FIXTURE/ra/states/Pinball.state"
 touch "$FIXTURE/ra/states/Pinball.state.png"
-out=$(run_scan)
+out=$(scan_lib)
 
 check "a save state produces a resume slot" \
   "0" "$(jq -r '.games[] | select(.title == "Pinball") | .resumeSlot' <<<"$out")"
@@ -152,7 +185,7 @@ check "resumeAt is a real timestamp" \
 # The auto state is newer, so it should win the slot.
 sleep 1
 touch "$FIXTURE/ra/states/Pinball.state.auto"
-out=$(run_scan)
+out=$(scan_lib)
 check "the newest state wins, including the auto slot" \
   "auto" "$(jq -r '.games[] | select(.title == "Pinball") | .resumeSlot' <<<"$out")"
 
@@ -162,7 +195,7 @@ mkdir -p "$FIXTURE/ra/states/Snes9x"
 sleep 1
 touch "$FIXTURE/ra/states/Snes9x/Super Mario World (USA).state1"
 touch "$FIXTURE/ra/states/Snes9x/Super Mario World (USA).state1.png"
-out=$(run_scan)
+out=$(scan_lib)
 
 check "states in a per-core subdirectory are found" \
   "1" "$(jq -r '.games[] | select(.title == "Super Mario World") | .resumeSlot' <<<"$out")"
@@ -175,7 +208,7 @@ check "a subdirectory state's thumbnail is found" \
 mkdir -p "$FIXTURE/ra/states/Gambatte"
 sleep 1
 touch "$FIXTURE/ra/states/Gambatte/Pinball.state2"
-out=$(run_scan)
+out=$(scan_lib)
 check "core-specific states beat same-basename fallback states" \
   "2" "$(jq -r '.games[] | select(.title == "Pinball") | .resumeSlot' <<<"$out")"
 
@@ -196,7 +229,7 @@ cat >"$FIXTURE/ra/playlists/Ambiguous.lpl" <<LPL
   ]
 }
 LPL
-out=$(run_scan)
+out=$(scan_lib)
 check "cores.conf can claim an ambiguous extension" \
   "snes9x" "$(jq -r '.games[] | select(.title == "arcade-set") | .coreName' <<<"$out")"
 
@@ -226,7 +259,7 @@ LPL
 mkdir -p "$FIXTURE/ra/thumbnails/Nintendo - Super Nintendo Entertainment System/Named_Boxarts"
 touch "$FIXTURE/ra/thumbnails/Nintendo - Super Nintendo Entertainment System/Named_Boxarts/Super Mario World.png"
 
-out=$(run_scan)
+out=$(scan_lib)
 
 
 check "playlist entries are used" \
@@ -273,7 +306,7 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
   ]
 }
 LPL
-out=$(run_scan)
+out=$(scan_lib)
 check "DETECT falls through to the extension map" \
   "snes9x" "$(jq -r '.games[] | select(.title == "Super Mario World") | .coreName' <<<"$out")"
 
@@ -291,7 +324,7 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
   ]
 }
 LPL
-out=$(run_scan)
+out=$(scan_lib)
 check "a playlist default core outranks the extension map" \
   "gambatte" "$(jq -r '.games[] | select(.title == "Super Mario World") | .coreName' <<<"$out")"
 
@@ -309,7 +342,7 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
   ]
 }
 LPL
-out=$(run_scan)
+out=$(scan_lib)
 check "an entry's own core outranks the playlist default" \
   "snes9x" "$(jq -r '.games[] | select(.title == "Super Mario World") | .coreName' <<<"$out")"
 
@@ -326,7 +359,7 @@ cat >"$FIXTURE/ra/playlists/Nintendo - Super Nintendo Entertainment System.lpl" 
   ]
 }
 LPL
-out=$(run_scan)
+out=$(scan_lib)
 check "a core that is not installed falls through instead of launching" \
   "snes9x" "$(jq -r '.games[] | select(.title == "Super Mario World") | .coreName' <<<"$out")"
 
@@ -348,7 +381,7 @@ LPL
 # --- Malformed playlist ------------------------------------------------------
 
 echo 'not json at all' >"$FIXTURE/ra/playlists/Broken.lpl"
-out=$(run_scan)
+out=$(scan_lib)
 check "a malformed playlist does not take the scan down with it" \
   "true" "$(jq '[.games[].title] | contains(["Super Mario World"])' <<<"$out")"
 
@@ -405,7 +438,7 @@ cat >"$FIXTURE/ra/playlists/Added.lpl" <<LPL
   ]
 }
 LPL
-out=$(run_scan)
+out=$(scan_lib)
 later_added=$(jq '.games[] | select(.title == "Later Addition") | .addedAt' <<<"$out")
 check "newly discovered games receive a newer added date" \
   "true" "$([[ $later_added -gt $first_added ]] && echo true || echo false)"

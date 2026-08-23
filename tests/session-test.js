@@ -95,4 +95,16 @@ assert.strictEqual(Session.fingerprintChanged("", "abc"), false)
 assert.strictEqual(Session.fingerprintChanged("abc", "abc"), false)
 assert.strictEqual(Session.fingerprintChanged("abc", "def"), true)
 
-console.log("session-test: 12 passed")
+// Scan builders flow through the seam like every other Library call, so the
+// streaming path needs no second import either.
+{
+  const b = Session.createScanBuilder()
+  b.addLine(JSON.stringify({ t: "header", games: 1 }))
+  b.addLine(JSON.stringify({ t: "game", g: game() }))
+  b.addLine(JSON.stringify({ t: "trailer", extensions: [], meta: {} }))
+  const r = b.finish()
+  assert.strictEqual(r.error, "")
+  assert.strictEqual(r.games.length, 1)
+}
+
+console.log("session-test: 13 passed")

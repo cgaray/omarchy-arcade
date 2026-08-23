@@ -51,44 +51,83 @@ const game = (over) =>
     over || {}
   )
 
-// --- parseLibrary -----------------------------------------------------------
+// --- scan builder -----------------------------------------------------------
 
-test("parseLibrary reports empty scanner output as an error, not an empty library", () => {
-  const r = Library.parseLibrary("")
+// The scanner streams tagged NDJSON; these helpers speak that protocol.
+const line = (o) => JSON.stringify(o)
+const headerLine = (games) => ({ t: "header", games })
+const gameLine = (g) => ({ t: "game", g })
+const trailerLine = (over) =>
+  Object.assign({ t: "trailer", extensions: [], meta: {} }, over || {})
+
+function feed(lines) {
+  const b = Library.createScanBuilder()
+  for (const l of lines) b.addLine(typeof l === "string" ? l : JSON.stringify(l))
+  return b.finish()
+}
+
+test("an empty stream is an error, not an innocent empty library", () => {
+  const r = feed([])
   assert.strictEqual(r.games.length, 0)
-  assert.ok(r.error, "expected an error for empty output")
+  assert.strictEqual(r.error, "scanner produced no output")
 })
 
-test("parseLibrary reports non-JSON as an error", () => {
-  const r = Library.parseLibrary("scan failed: jq not found")
+test("a non-JSON line is reported as an error", () => {
+  const r = feed(["scan failed: jq not found"])
   assert.ok(r.error, "expected an error for non-JSON output")
 })
 
-test("parseLibrary accepts a well-formed library", () => {
-  const r = Library.parseLibrary(JSON.stringify({ games: [game()], meta: { fromPlaylists: 1 } }))
+test("a well-formed stream builds the library", () => {
+  const r = feed([
+    line(headerLine(1)),
+    line(gameLine(game())),
+    line(trailerLine({ meta: { fromPlaylists: 1 } }))
+  ])
   assert.strictEqual(r.error, "")
   assert.strictEqual(r.games.length, 1)
   assert.strictEqual(r.games[0].title, "A Game")
   assert.strictEqual(r.meta.fromPlaylists, 1)
 })
 
-test("parseLibrary drops entries with no ROM or no core", () => {
-  const raw = JSON.stringify({
-    games: [game(), game({ rom: "" }), game({ core: "" })]
-  })
-  assert.strictEqual(Library.parseLibrary(raw).games.length, 1)
+test("entries with no ROM or no core are dropped at the edge", () => {
+  const r = feed([
+    headerLine(3),
+    gameLine(game()),
+    gameLine({ title: "no rom", core: "c" }),
+    gameLine({ title: "no core", rom: "/r" }),
+    trailerLine()
+  ].map(line))
+  assert.strictEqual(r.games.length, 1)
 })
 
-test("parseLibrary keeps resumeSlot 0 distinguishable from no slot", () => {
-  const raw = JSON.stringify({ games: [game({ resumeSlot: "0", resumeAt: 100 })] })
-  const g = Library.parseLibrary(raw).games[0]
-  assert.strictEqual(g.resumeSlot, "0")
-  assert.strictEqual(g.resumeAt, 100)
+test("resumeSlot 0 stays distinguishable from no slot", () => {
+  const r = feed([headerLine(1), gameLine(game({ resumeSlot: "0", resumeAt: 100 })), trailerLine()])
+  assert.strictEqual(r.games[0].resumeSlot, "0")
+  assert.strictEqual(r.games[0].resumeAt, 100)
 })
 
-test("parseLibrary keeps the persisted first-discovered timestamp", () => {
-  const raw = JSON.stringify({ games: [game({ addedAt: 1234 })] })
-  assert.strictEqual(Library.parseLibrary(raw).games[0].addedAt, 1234)
+test("the persisted first-discovered timestamp survives the stream", () => {
+  const r = feed([headerLine(1), gameLine(game({ addedAt: 1234 })), trailerLine()])
+  assert.strictEqual(r.games[0].addedAt, 1234)
+})
+
+test("a stream without its trailer is incomplete, not empty", () => {
+  const r = feed([line(headerLine(1)), line(gameLine(game()))])
+  assert.strictEqual(r.error, "scanner output was incomplete")
+  assert.strictEqual(r.games.length, 0)
+})
+
+test("unrecognised tags and blank lines are skipped, not fatal", () => {
+  const r = feed([
+    "",
+    line(headerLine(1)),
+    line({ t: "something-new" }),
+    line(gameLine(game())),
+    "   ",
+    line(trailerLine())
+  ])
+  assert.strictEqual(r.error, "")
+  assert.strictEqual(r.games.length, 1)
 })
 
 // --- filterGames ------------------------------------------------------------
@@ -269,9 +308,9 @@ test("digits and empty input survive", () => {
   assert.strictEqual(Library.prettyTitle(""), "")
 })
 
-test("parseLibrary applies it to incoming titles", () => {
-  const raw = JSON.stringify({ games: [game({ title: "SUPER METROID" })] })
-  assert.strictEqual(Library.parseLibrary(raw).games[0].title, "Super Metroid")
+test("incoming all-caps titles are title-cased on the way through", () => {
+  const r = feed([headerLine(1), gameLine(game({ title: "SUPER METROID" })), trailerLine()])
+  assert.strictEqual(r.games[0].title, "Super Metroid")
 })
 
 // --- shortSystem ------------------------------------------------------------
@@ -326,16 +365,15 @@ const ext = (over) =>
   Object.assign({ ext: "sfc", candidates: [{ id: "snes9x" }, { id: "bsnes" }], chosen: "", resolved: "bsnes" },
     over || {})
 
-test("parseLibrary carries the extension table through", () => {
-  const raw = JSON.stringify({ games: [game()], extensions: [ext()] })
-  const r = Library.parseLibrary(raw)
+test("the extension table rides the trailer", () => {
+  const r = feed([headerLine(1), gameLine(game()), trailerLine({ extensions: [ext()] })])
   assert.strictEqual(r.extensions.length, 1)
   assert.strictEqual(r.extensions[0].ext, "sfc")
   assert.strictEqual(r.extensions[0].candidates.length, 2)
 })
 
-test("a library with no extension table is not an error", () => {
-  const r = Library.parseLibrary(JSON.stringify({ games: [game()] }))
+test("a stream with no extension table is not an error", () => {
+  const r = feed([headerLine(1), gameLine(game()), trailerLine()])
   assert.strictEqual(r.error, "")
   assert.deepStrictEqual(r.extensions, [])
 })
@@ -381,11 +419,10 @@ test("one session is not pluralised", () => {
   assert.ok(Library.playSummary(g, now).indexOf("1 session ") >= 0)
 })
 
-test("parseLibrary carries playtime through", () => {
-  const raw = JSON.stringify({ games: [game({ playSeconds: 120, playCount: 2 })] })
-  const g = Library.parseLibrary(raw).games[0]
-  assert.strictEqual(g.playSeconds, 120)
-  assert.strictEqual(g.playCount, 2)
+test("playtime rides the game lines", () => {
+  const r = feed([headerLine(1), gameLine(game({ playSeconds: 120, playCount: 2 })), trailerLine()])
+  assert.strictEqual(r.games[0].playSeconds, 120)
+  assert.strictEqual(r.games[0].playCount, 2)
 })
 
 // --- formatAgo --------------------------------------------------------------

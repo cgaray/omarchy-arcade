@@ -6,8 +6,10 @@
 // file returns and never import Library.js themselves -- one seam, tested
 // here, instead of view-model knowledge spread across two object trees.
 
-function parseScan(raw) {
-  return Library.parseLibrary(raw)
+// Scanner output arrives as tagged NDJSON; views feed lines into a builder
+// and read the finished library off finish(), never holding the stream.
+function createScanBuilder() {
+  return Library.createScanBuilder()
 }
 
 function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly, sortMode) {
@@ -101,7 +103,7 @@ function highlightTitle(raw, query, accent) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    parseScan: parseScan,
+    createScanBuilder: createScanBuilder,
     rebuild: rebuild,
     launchRequest: launchRequest,
     fingerprintChanged: fingerprintChanged,

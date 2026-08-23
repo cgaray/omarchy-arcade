@@ -31,32 +31,61 @@ Item {
 
   property string lastFingerprint: ""
 
+  // Scan state. The builder accumulates parsed rows as lines arrive, so no
+  // part of this process ever holds the whole library as text. A refresh()
+  // while a scan is already running never kills it: it is remembered and
+  // rerun once the in-flight scan commits, which also means every exited
+  // signal belongs to the builder that is still current.
+  property var scanBuilder: null
+  property bool rescanPending: false
+
   function refresh() {
+    if (root.scanning) {
+      root.rescanPending = true
+      return
+    }
     root.scanning = true
-    scanProcess.running = false
+    root.scanBuilder = Session.createScanBuilder()
     scanProcess.running = true
   }
 
-  function applyScan(raw) {
+  function finishScan(exitCode) {
+    var builder = root.scanBuilder
+    root.scanBuilder = null
     root.scanning = false
     // A finished scan is itself the new baseline; comparing against a stale
     // fingerprint would only trigger an immediate duplicate rescan.
     root.lastFingerprint = ""
-    var parsed = Session.parseScan(raw)
-    root.loadError = parsed.error
-    root.games = parsed.games
-    root.extensions = parsed.extensions
-    root.scanMeta = parsed.meta
+    var result = builder
+      ? builder.finish()
+      : { games: [], extensions: [], meta: {}, error: "scanner produced no output" }
+    // An empty stream is the builder's error to report; anything else the
+    // process says about itself is worth keeping too.
+    if (!result.error && exitCode !== 0)
+      result.error = "scanner exited with status " + exitCode
+    root.loadError = result.error
+    root.games = result.games
+    root.extensions = result.extensions
+    root.scanMeta = result.meta
     root.changed()
+    if (root.rescanPending) {
+      root.rescanPending = false
+      root.refresh()
+    }
   }
 
   Process {
     id: scanProcess
     command: [root.pluginDir + "/bin/omarchy-arcade-scan"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.applyScan(text)
+    // Lines are parsed as they arrive. StdioCollector buffered the entire
+    // library as one string before parsing, putting the whole document --
+    // plus its parse tree -- inside the long-lived shell at once.
+    stdout: SplitParser {
+      onRead: function (line) {
+        if (root.scanBuilder) root.scanBuilder.addLine(line)
+      }
     }
+    onExited: function (exitCode) { root.finishScan(exitCode) }
   }
 
   Process {
