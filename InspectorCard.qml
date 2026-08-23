@@ -20,6 +20,10 @@ Rectangle {
   property string fontFamily: Style.font.menuFamily
   property int cornerRadius: Style.cornerRadius
 
+  // The user picked a specific save state to resume; the surface owns what
+  // launching means.
+  signal resumeSlotChosen(string slot)
+
   radius: card.cornerRadius
   color: card.selectedBackground
   border.width: Math.max(1, Style.space(1))
@@ -117,6 +121,33 @@ Rectangle {
         font.family: card.fontFamily
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight
+      }
+
+      // One chip per save state, newest first, so resuming a chosen slot is
+      // a click instead of a trip through RetroArch's own menu. Only worth
+      // the space when there is a choice to make.
+      Row {
+        width: parent.width
+        spacing: Style.space(6)
+        visible: card.game && card.game.slots && card.game.slots.length > 1
+
+        Repeater {
+          model: card.game ? (card.game.slots || []) : []
+
+          Button {
+            required property int index
+            required property var modelData
+            text: (modelData.slot === "auto" ? "auto" : "S" + modelData.slot)
+                  + (modelData.at > 0 ? " · " + Session.formatAgo(modelData.at, card.nowSeconds) : "")
+            selected: card.game !== null && modelData.slot === card.game.resumeSlot
+            bordered: true
+            foreground: card.foreground
+            accent: card.accent
+            fontFamily: card.fontFamily
+            fontSize: Style.font.caption
+            onClicked: card.resumeSlotChosen(modelData.slot)
+          }
+        }
       }
     }
   }

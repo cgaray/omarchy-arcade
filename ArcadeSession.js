@@ -73,10 +73,14 @@ function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly, s
   }
 }
 
-function launchRequest(game, resume, launcherPath) {
+function launchRequest(game, resume, launcherPath, slot) {
   if (!game) return []
   var args = [launcherPath, "--core", game.core, "--rom", game.rom]
-  if (resume && game.resumeSlot) args.push("--slot", game.resumeSlot)
+  // An explicitly chosen slot wins even over "start fresh" -- picking a
+  // state from the inspector IS the resume gesture. Otherwise the old
+  // contract holds: resume the newest state when asked, fresh when not.
+  var useSlot = slot || (resume && game.resumeSlot) || ""
+  if (useSlot) args.push("--slot", useSlot)
   return args
 }
 

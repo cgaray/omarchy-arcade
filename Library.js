@@ -43,6 +43,20 @@ function normalizeGame(g, pool) {
     playSeconds: Number(g.playSeconds || 0),
     playCount: Number(g.playCount || 0)
   }
+  // Every save state the scanner found, newest first: "slot:mtime" pairs
+  // from the wire become small objects the inspector can offer as chips.
+  // Most games have none, so the field only exists when there is something
+  // to pick between.
+  var rawSlots = String(g.slots == null ? "" : g.slots)
+  if (rawSlots.length) {
+    var pairs = rawSlots.split(",")
+    var parsed = []
+    for (var p = 0; p < pairs.length && p < 16; p++) {
+      var kv = pairs[p].split(":")
+      if (kv[0]) parsed.push({ slot: kv[0], at: Number(kv[1] || 0) })
+    }
+    if (parsed.length > 1) row.slots = parsed
+  }
   // `key` was always the ROM path restated; views identify rows by `rom`.
   if (g.key && String(g.key) !== rom) row.key = String(g.key)
   return row

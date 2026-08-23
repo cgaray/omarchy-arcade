@@ -33,6 +33,19 @@ assert.deepStrictEqual(
    "--slot", "auto"]
 )
 
+// An explicitly chosen slot wins, even over "start fresh" -- picking a state
+// from the inspector IS the resume gesture.
+assert.deepStrictEqual(
+  Session.launchRequest(game({ resumeSlot: "3" }), true, "/bin/launch", "auto"),
+  ["/bin/launch", "--core", "/cores/snes9x_libretro.so", "--rom", "/roms/a.sfc",
+   "--slot", "auto"]
+)
+assert.deepStrictEqual(
+  Session.launchRequest(game(), false, "/bin/launch", "5"),
+  ["/bin/launch", "--core", "/cores/snes9x_libretro.so", "--rom", "/roms/a.sfc",
+   "--slot", "5"]
+)
+
 const rebuilt = Session.rebuild([
   game({ system: "SNES", resumeSlot: "0", resumeAt: 100 }),
   game({ key: "/roms/b.nes", rom: "/roms/b.nes", title: "Other", system: "NES" })

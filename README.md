@@ -14,7 +14,8 @@ cover-art grid.
 
 ## Features
 
-- Resume save states from their RetroArch screenshots, or start games fresh.
+- Resume save states from their RetroArch screenshots, pick any slot from
+  the inspector, or start games fresh.
 - Browse by system and sort by date added, save date, last played, or name.
 - Search from either the bar panel or the fullscreen overlay.
 - Use RetroArch playlists, installed cores, save states, and thumbnail art
@@ -82,7 +83,9 @@ Middle-clicking the bar icon rescans the library.
 
 Use the arrow keys to move, `Enter` to resume, and `f` to start fresh. Start
 typing to search. `Tab` and `Shift+Tab` change systems, `Ctrl+S` shows only
-games with save states, and `?` lists every shortcut. Press `Esc` to close.
+games with save states, and `?` lists every shortcut. Games with several
+save states show a chip per slot under the selected game's details — click
+one to resume that slot. Press `Esc` to close.
 
 ## Core selection
 

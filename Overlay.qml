@@ -222,6 +222,16 @@ Item {
     Quickshell.execDetached(args)
   }
 
+  // Picking a state from the inspector is its own resume gesture: it names
+  // the slot outright, newest or not.
+  function launchSlot(game, slot) {
+    if (!game || !slot) return
+    var args = Session.launchRequest(game, true,
+      root.pluginDir + "/bin/omarchy-arcade-launch", slot)
+    root.dismiss()
+    Quickshell.execDetached(args)
+  }
+
   function activate(resume) {
     if (root.selectedIndex < 0 || root.selectedIndex >= root.visibleGames.length) return
     root.launch(root.visibleGames[root.selectedIndex], resume)
@@ -491,10 +501,16 @@ Item {
 
         // The selected tile has a persistent reading surface, so keyboard
         // browsing never requires opening a game just to inspect its details.
+        // A game with several save states grows the card to fit its slot
+        // chips; most games keep the compact height.
         Item {
           id: inspector
           width: parent.width
-          height: root.selectedGame ? Style.space(116) : 0
+          height: {
+            if (!root.selectedGame) return 0
+            var slots = root.selectedGame.slots
+            return slots && slots.length > 1 ? Style.space(150) : Style.space(116)
+          }
           visible: root.selectedGame !== null
           clip: true
 
@@ -508,6 +524,7 @@ Item {
             selectedText: root.selectedText
             fontFamily: root.fontFamily
             cornerRadius: root.cornerRadius
+            onResumeSlotChosen: function (slot) { root.launchSlot(root.selectedGame, slot) }
           }
         }
 

@@ -107,7 +107,7 @@ core_path_for() {
 }
 
 # Index save states by ROM basename and core directory.
-declare -A STATE_SLOT STATE_MTIME STATE_THUMB
+declare -A STATE_SLOT STATE_MTIME STATE_THUMB STATE_SLOTS
 
 index_states() {
   [[ -d $SAVESTATE_DIR ]] || return 0
@@ -122,7 +122,7 @@ index_states() {
       base="${fname%.state}"; slot=0
     elif [[ $fname == *.state.auto ]]; then
       base="${fname%.state.auto}"; slot=auto
-    elif [[ $fname =~ ^(.+)\.state([0-9]+)$ ]]; then
+    elif [[ $fname =~ ^(.+)\.state([0-9]+)$ ]] ; then
       base="${BASH_REMATCH[1]}"; slot="${BASH_REMATCH[2]}"
     else
       continue
@@ -139,6 +139,10 @@ index_states() {
     fi
     key="$state_core|$base"
     mtime=$(stat -c %Y "$f" 2>/dev/null) || continue
+    # Every slot is remembered, not only the newest: the inspector lets the
+    # user resume a chosen one. Pairs collect as "slot:mtime"; newest_state
+    # sorts them for emission.
+    STATE_SLOTS[$key]+="${slot}:${mtime}"$'\n'
     if [[ -z ${STATE_MTIME[$key]:-} ]] || (( mtime > ${STATE_MTIME[$key]} )); then
       STATE_MTIME[$key]=$mtime
       STATE_SLOT[$key]=$slot
@@ -147,10 +151,11 @@ index_states() {
   done < <(find "$SAVESTATE_DIR" -type f -print0 2>/dev/null)
 }
 
-# "slot<TAB>mtime<TAB>thumbnail" in STATE_INFO for a ROM, or non-zero when it
-# has no state. The slot is a string rather than a number because "auto" is a
-# real slot that no integer names, and reusing a negative integer for it
-# collides with the "no state at all" sentinel.
+# "slot<TAB>mtime<TAB>thumbnail<TAB>slots" in STATE_INFO for a ROM, or
+# non-zero when it has no state. The slot is a string rather than a number
+# because "auto" is a real slot that no integer names, and reusing a negative
+# integer for it collides with the "no state at all" sentinel. `slots` is a
+# newest-first "slot:mtime,slot:mtime" list of every state the game has.
 newest_state() {
   STATE_INFO=""
   local rom="$1" core="${2:-}"
@@ -167,7 +172,15 @@ newest_state() {
     key="|$base"
   fi
   [[ -n ${STATE_MTIME[$key]:-} ]] || return 1
-  printf -v STATE_INFO '%s\t%s\t%s' "${STATE_SLOT[$key]}" "${STATE_MTIME[$key]}" "${STATE_THUMB[$key]}"
+  local sorted
+  sorted=$(sort -t: -k2,2rn <<<"${STATE_SLOTS[$key]:-}" | tr '\n' ',')
+  sorted=${sorted%,}
+  sorted=${sorted%,}
+  # Fields join on the unit separator, not a tab: tab is IFS whitespace, so
+  # the reader's `read` would collapse the empty thumbnail field into its
+  # neighbour and shift every field after it.
+  printf -v STATE_INFO '%s\x1f%s\x1f%s\x1f%s' \
+    "${STATE_SLOT[$key]}" "${STATE_MTIME[$key]}" "${STATE_THUMB[$key]}" "$sorted"
 }
 
 # Resolve box art from the playlist database name into BOXART.
@@ -295,7 +308,7 @@ emit_games() {
     --argjson retroarch "$RETROARCH_PRESENT" '
     (split("\u0000")
       | if .[-1] == "" then .[:-1] else . end
-      | [range(0; length; 11) as $i
+      | [range(0; length; 12) as $i
         | {
             key: (.[$i] | .[0:4096]), title: (.[$i + 1] | .[0:512]),
             system: (.[$i + 2] | .[0:512]), ext: (.[$i + 3] | .[0:64]),
@@ -303,7 +316,8 @@ emit_games() {
             rom: (.[$i + 6] | .[0:4096]), art: (.[$i + 7] | .[0:4096]),
             resumeSlot: (.[$i + 8] | .[0:16]),
             resumeAt: ((.[$i + 9] | .[0:32]) | tonumber),
-            resumeArt: (.[$i + 10] | .[0:4096])
+            resumeArt: (.[$i + 10] | .[0:4096]),
+            slots: (.[$i + 11] | .[0:512])
           }])
     | map(. as $game
       | ($plays[$game.rom] // {}) as $play
@@ -399,9 +413,9 @@ add_game() {
   local art=""
   boxart_for "$db" "$label" && art=$BOXART
 
-  local slot="" resume_at=0 resume_art=""
+  local slot="" resume_at=0 resume_art="" slots=""
   if newest_state "$rom" "$core"; then
-    IFS=$'\t' read -r slot resume_at resume_art <<<"$STATE_INFO"
+    IFS=$'\x1f' read -r slot resume_at resume_art slots <<<"$STATE_INFO"
   fi
 
   local core_name="${core##*/}"
@@ -416,7 +430,7 @@ add_game() {
   [[ -n $db ]] || db="${CORE_SYSTEM[$core_name]:-}"
 
   printf '%s\0' "$rom" "$label" "$db" "$ext" "$core" "$core_name" \
-    "$rom" "$art" "$slot" "${resume_at:-0}" "$resume_art" >>"$RECORDS_FILE"
+    "$rom" "$art" "$slot" "${resume_at:-0}" "$resume_art" "${slots:-}" >>"$RECORDS_FILE"
 }
 
 # A cheap signature of everything a scan depends on: the save states, the

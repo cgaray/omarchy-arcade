@@ -130,6 +130,31 @@ test("a key genuinely distinct from the ROM path survives", () => {
   assert.strictEqual(r.games[0].key, "mame:slugs")
 })
 
+// Save-state slots arrive newest first as "slot:mtime" pairs; a choice only
+// exists once there is more than one.
+test("multiple slots parse into a newest-first list", () => {
+  const r = feed([
+    headerLine(1),
+    gameLine(game({ resumeSlot: "auto", slots: "auto:200,0:100,3:50" })),
+    trailerLine()
+  ])
+  assert.deepStrictEqual(r.games[0].slots, [
+    { slot: "auto", at: 200 },
+    { slot: "0", at: 100 },
+    { slot: "3", at: 50 }
+  ])
+})
+
+test("a single slot is not a choice, so no list is kept", () => {
+  const r = feed([headerLine(1), gameLine(game({ resumeSlot: "0", slots: "0:100" })), trailerLine()])
+  assert.ok(!("slots" in r.games[0]))
+})
+
+test("a game with no states carries no slot list", () => {
+  const r = feed([headerLine(1), gameLine(game()), trailerLine()])
+  assert.ok(!("slots" in r.games[0]))
+})
+
 test("unrecognised tags and blank lines are skipped, not fatal", () => {
   const r = feed([
     "",

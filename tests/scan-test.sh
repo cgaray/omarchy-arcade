@@ -189,6 +189,14 @@ out=$(scan_lib)
 check "the newest state wins, including the auto slot" \
   "auto" "$(jq -r '.games[] | select(.title == "Pinball") | .resumeSlot' <<<"$out")"
 
+# Every state the game has is reported, newest first, so the inspector can
+# offer a choice instead of only the winner.
+pinball_slots="$(jq -r '.games[] | select(.title == "Pinball") | .slots' <<<"$out")"
+check "all slots are emitted newest first" \
+  "auto" "${pinball_slots%%:*}"
+check "the older slot is still listed" \
+  "true" "$([[ $pinball_slots == *'0:'* ]] && echo true || echo false)"
+
 # RetroArch's sort_savestates_enable puts states in a per-core subdirectory,
 # so the scanner has to find them below the configured directory, not in it.
 mkdir -p "$FIXTURE/ra/states/Snes9x"
