@@ -427,7 +427,7 @@ add_game() {
 # to keep alive across a shell restart. A 46ms find is none of those things.
 fingerprint() {
   {
-    [[ -f $RA_CFG ]] && { printf 'retroarch.cfg\t'; <"$RA_CFG"; }
+    [[ -f $RA_CFG ]] && { printf 'retroarch.cfg\t'; cat "$RA_CFG"; }
     find "$SAVESTATE_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -printf '%T@\t%s\t%p\n' 2>/dev/null
     find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' -printf '%T@\t%s\t%p\n' 2>/dev/null

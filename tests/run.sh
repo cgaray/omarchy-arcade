@@ -30,6 +30,16 @@ for script in "$ROOT"/bin/*; do
   step "bash -n $(basename "$script")" bash -n "$script"
 done
 
+# Semantic lint for the plugin scripts; bash -n only proves syntax. Skipped
+# where shellcheck is not installed -- GitHub's ubuntu runners ship it.
+if command -v shellcheck >/dev/null; then
+  for script in "$ROOT"/bin/*; do
+    step "shellcheck $(basename "$script")" shellcheck -x "$script"
+  done
+else
+  echo "── shellcheck (skipped: not installed)"
+fi
+
 # Overlay.qml has a plain Item root, so qmllint can resolve and check it.
 # Panel.qml cannot be linted: its root type comes from qs.Ui, which qmllint
 # cannot resolve without Quickshell's type information, and it exits non-zero

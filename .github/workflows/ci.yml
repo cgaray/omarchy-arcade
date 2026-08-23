@@ -15,10 +15,9 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      # qmllint is not on the runner and Quickshell's types are not
-      # resolvable there anyway; tests/run.sh skips it when absent.
+      # jq and shellcheck are preinstalled on GitHub's ubuntu runners, so the
+      # workflow needs no package installs (and carries no sudo). qmllint is
+      # not on the runner and Quickshell's types are not resolvable there
+      # anyway; tests/run.sh skips it when absent.
       - name: Run the test suite
         run: ./tests/run.sh
