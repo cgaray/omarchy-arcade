@@ -21,9 +21,11 @@ function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly, s
   }
 
   if (savedOnly) list = list.filter(function (game) { return game.resumeAt > 0 })
+  // Computed once: the presence check below and the returned chip row read
+  // the same table.
+  var systems = Library.systemsOf(list)
   var wanted = String(system || "")
   if (wanted) {
-    var systems = Library.systemsOf(list)
     var present = false
     for (var s = 0; s < systems.length; s++) {
       if (systems[s].system === wanted) { present = true; break }
@@ -59,7 +61,7 @@ function rebuild(games, query, system, libraryLimit, continueLimit, savedOnly, s
     systemFilter: wanted,
     continueRows: (!query && continueLimit > 0) ? Library.resumableIn(list, wanted, continueLimit) : [],
     libraryRows: rows,
-    systems: Library.systemsOf(list),
+    systems: systems,
     resumableTotal: resumableTotal
   }
 }
@@ -69,6 +71,31 @@ function launchRequest(game, resume, launcherPath) {
   var args = [launcherPath, "--core", game.core, "--rom", game.rom]
   if (resume && game.resumeSlot) args.push("--slot", game.resumeSlot)
   return args
+}
+
+// Index of the active system in the filter row, All being 0.
+function systemIndex(systems, system) {
+  if (!system) return 0
+  for (var i = 0; i < systems.length; i++)
+    if (systems[i].system === system) return i + 1
+  return 0
+}
+
+// The system `slot` steps along the filter row, All included: slot 0 is All,
+// slot n is systems[n-1], and anything past the end is not a jump at all.
+function systemAtSlot(systems, slot) {
+  if (!slot) return ""
+  return systems[slot - 1] ? systems[slot - 1].system : null
+}
+
+// Where cycling lands after delta steps around the filter row, All included.
+// A single-system (or empty) library has nowhere to cycle, so the current
+// filter comes back unchanged.
+function nextSystem(systems, current, delta) {
+  var count = systems.length + 1
+  if (count <= 1) return current
+  var at = (systemIndex(systems, current) + delta + count) % count
+  return at === 0 ? "" : systems[at - 1].system
 }
 
 function fingerprintChanged(previous, next) {
@@ -106,6 +133,9 @@ if (typeof module !== "undefined" && module.exports) {
     createScanBuilder: createScanBuilder,
     rebuild: rebuild,
     launchRequest: launchRequest,
+    systemIndex: systemIndex,
+    systemAtSlot: systemAtSlot,
+    nextSystem: nextSystem,
     fingerprintChanged: fingerprintChanged,
     formatAgo: formatAgo,
     systemAndCore: systemAndCore,

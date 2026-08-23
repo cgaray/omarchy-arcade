@@ -107,4 +107,22 @@ assert.strictEqual(Session.fingerprintChanged("abc", "def"), true)
   assert.strictEqual(r.games.length, 1)
 }
 
+// System cycling lives here so both surfaces share one mental model: the
+// filter row is All plus the counted systems, wrapping in both directions.
+const chips = [{ system: "NES" }, { system: "SNES" }]
+assert.strictEqual(Session.systemIndex(chips, ""), 0)
+assert.strictEqual(Session.systemIndex(chips, "NES"), 1)
+assert.strictEqual(Session.systemIndex(chips, "Missing"), 0)
+assert.strictEqual(Session.systemAtSlot(chips, 0), "")
+assert.strictEqual(Session.systemAtSlot(chips, 2), "SNES")
+assert.strictEqual(Session.systemAtSlot(chips, 3), null)
+assert.strictEqual(Session.nextSystem(chips, "", 1), "NES")
+assert.strictEqual(Session.nextSystem(chips, "SNES", 1), "")
+assert.strictEqual(Session.nextSystem(chips, "", -1), "SNES")
+// Nowhere to cycle: an empty filter row hands back the current filter.
+assert.strictEqual(Session.nextSystem([], "SNES", 1), "SNES")
+// One real system still has All on the row, so cycling toggles between them.
+assert.strictEqual(Session.nextSystem([{ system: "NES" }], "", 1), "NES")
+assert.strictEqual(Session.nextSystem([{ system: "NES" }], "NES", -1), "")
+
 console.log("session-test: 13 passed")

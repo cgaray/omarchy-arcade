@@ -163,7 +163,7 @@ Panel {
     }
     if (zone === "systems") {
       // Start on the active system chip.
-      root.systemCursor = root.systemIndexOf(root.systemFilter)
+      root.systemCursor = Session.systemIndex(root.systems, root.systemFilter)
     }
     if (zone === "list") root.cursorActive = true
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
@@ -176,32 +176,20 @@ Panel {
     root.enterZone(zones[(at + delta + zones.length) % zones.length])
   }
 
-  // Index into the chip row, All being 0.
-  function systemIndexOf(system) {
-    if (!system) return 0
-    for (var i = 0; i < root.systems.length; i++)
-      if (root.systems[i].system === system) return i + 1
-    return 0
-  }
+  // Chip-row index bookkeeping lives in Session (systemIndex/systemAtSlot);
+  // this surface only wires cursor state to it.
 
-  function systemAt(index) {
-    if (index <= 0) return ""
-    return root.systems[index - 1] ? root.systems[index - 1].system : ""
-  }
-
-  // Moving along the chip row applies as it goes, so the list below is always
-  // showing what the highlighted chip means.
   function moveSystemCursor(delta) {
     var count = root.systems.length + 1
     if (count <= 1) return
     root.systemCursor = Math.max(0, Math.min(count - 1, root.systemCursor + delta))
-    root.setSystem(root.systemAt(root.systemCursor))
+    root.setSystem(Session.systemAtSlot(root.systems, root.systemCursor) || "")
   }
 
   function setSystem(system) {
     root.systemFilter = system
     root.cursorIndex = 0
-    root.systemCursor = root.systemIndexOf(system)
+    root.systemCursor = Session.systemIndex(root.systems, system)
     root.rebuild()
     Qt.callLater(function () { panelFlick.contentY = 0 })
   }
@@ -209,10 +197,8 @@ Panel {
   // "s" walks the filter row, All included, so the whole library stays
   // reachable from the keyboard without hunting for the chip.
   function cycleSystem(delta) {
-    var count = root.systems.length + 1
-    if (count <= 1) return
-    var at = root.systemIndexOf(root.systemFilter)
-    root.setSystem(root.systemAt((at + delta + count) % count))
+    var next = Session.nextSystem(root.systems, root.systemFilter, delta)
+    if (next !== root.systemFilter) root.setSystem(next)
   }
 
   // `resume` is what Enter means everywhere in this panel; Shift+Enter and the
@@ -239,7 +225,7 @@ Panel {
       root.cursorActive = false
       root.cursorIndex = 0
       root.focusZone = "list"
-      root.systemCursor = root.systemIndexOf(root.systemFilter)
+      root.systemCursor = Session.systemIndex(root.systems, root.systemFilter)
       root.refresh()
     }
   }

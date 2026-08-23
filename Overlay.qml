@@ -172,27 +172,14 @@ Item {
     Qt.callLater(function () { grid.positionViewAtIndex(0, GridView.Beginning) })
   }
 
-  function systemIndex() {
-    if (!root.systemFilter) return 0
-    for (var i = 0; i < root.systems.length; i++)
-      if (root.systems[i].system === root.systemFilter) return i + 1
-    return 0
-  }
-
   function cycleSystem(delta) {
-    var count = root.systems.length + 1
-    if (count <= 1) return
-    var at = (systemIndex() + delta + count) % count
-    root.setSystem(at === 0 ? "" : root.systems[at - 1].system)
+    var next = Session.nextSystem(root.systems, root.systemFilter, delta)
+    if (next !== root.systemFilter) root.setSystem(next)
   }
 
   function jumpSystem(slot) {
-    if (slot === 0) {
-      root.setSystem("")
-      return
-    }
-    if (slot <= root.systems.length)
-      root.setSystem(root.systems[slot - 1].system)
+    var system = Session.systemAtSlot(root.systems, slot)
+    if (system !== null && system !== root.systemFilter) root.setSystem(system)
   }
 
   function systemShortcut(event) {
