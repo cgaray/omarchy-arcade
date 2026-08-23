@@ -76,6 +76,11 @@ Rectangle {
         id: boxart
         anchors.fill: parent
         source: row.game ? Util.fileUrl(row.game.art) : ""
+        // Box art ships at 400x600 and more; decoding it all to sit in a
+        // 26-48px thumbnail is the single biggest per-row cost in a long
+        // panel. sourceSize bounds the decode to roughly twice display
+        // size, which is what Retina-class screens can show anyway.
+        sourceSize.width: Style.space(128)
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         visible: status === Image.Ready

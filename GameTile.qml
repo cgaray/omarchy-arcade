@@ -75,6 +75,10 @@ Item {
             if (tile.game.resumeArt) return Util.fileUrl(tile.game.resumeArt)
             return Util.fileUrl(tile.game.art)
           }
+          // Cover art and snapshots both arrive far larger than the tile
+          // shows; bounding the decode keeps a wall of tiles from holding
+          // hundreds of full-resolution textures.
+          sourceSize.width: Style.space(640)
           fillMode: Image.PreserveAspectFit
           asynchronous: true
           // Snapshots are rewritten in place on every save, so a cached copy

@@ -59,6 +59,7 @@ Rectangle {
           if (card.game.resumeArt) return Util.fileUrl(card.game.resumeArt)
           return Util.fileUrl(card.game.art)
         }
+        sourceSize.width: Style.space(320)
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: !(card.game && card.game.resumeArt)

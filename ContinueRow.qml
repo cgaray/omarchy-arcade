@@ -64,6 +64,10 @@ Rectangle {
         id: stateThumb
         anchors.fill: parent
         source: row.game ? Util.fileUrl(row.game.resumeArt) : ""
+        // Save-state snapshots are full screen grabs; the row shows a
+        // 66x44 thumbnail, so bound the decode to it (times two for
+        // high-density screens).
+        sourceSize.width: Style.space(192)
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         // The state thumbnail is rewritten in place every time you save, so
