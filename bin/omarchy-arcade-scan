@@ -13,13 +13,89 @@ CORES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/arcade/cores.conf"
 INFO_DIR=""
 RECORDS_FILE=""
 ADDED_TMP=""
+RECORDS_CHARS=0
+
+warn() {
+  echo "omarchy-arcade-scan: $*" >&2
+}
 
 die() {
-  echo "omarchy-arcade-scan: $*" >&2
+  warn "$*"
   exit 1
 }
 
 command -v jq >/dev/null || die "jq is required"
+
+# Bounds, applied while a collection is built rather than after it exists.
+#
+# Everything read here is user-controlled and validated by nothing upstream:
+# the save-state tree, the playlist directory and the JSON state files are
+# whatever RetroArch -- or anyone with a text editor -- last wrote. The
+# emitted-record and retained-model caps keep the long-lived shell small, but
+# they apply downstream, after this process has already walked the tree and
+# parsed the documents. So each collection is capped as it is built, and a
+# tree nobody should have costs a truncated scan and a line in the journal
+# instead of unbounded CPU, memory and wall clock.
+#
+# Every cap can be raised but none can be removed: a limit that accepts zero
+# is a limit a stray empty variable turns off.
+bound() {
+  BOUND="$1"
+  if [[ ${2:-} =~ ^[1-9][0-9]*$ ]]; then BOUND="$2"; fi
+}
+bound 20000 "${OMARCHY_ARCADE_MAX_STATE_FILES:-}"; MAX_STATE_FILES=$BOUND
+bound 10000 "${OMARCHY_ARCADE_MAX_GAMES:-}"; MAX_GAMES=$BOUND
+bound $((16 * 1024 * 1024)) "${OMARCHY_ARCADE_MAX_JSON_BYTES:-}"; MAX_JSON_BYTES=$BOUND
+bound 120 "${OMARCHY_ARCADE_DEADLINE:-}"; DEADLINE=$BOUND
+
+# RetroArch's deepest known layout is states/<core>/<content>/<file>; depth 4
+# leaves a level of headroom without descending a tree of unknown shape to
+# the bottom.
+MAX_STATE_DEPTH=4
+# Slots listed per game. The newest state is tracked separately, so a game
+# past this cap still resumes -- only its slot list is shorter.
+MAX_STATE_SLOTS=64
+MAX_PLAYLISTS=256
+# retroarch.cfg is read only this far, once per key.
+MAX_CFG_BYTES=$((1024 * 1024))
+# Directory entries hashed per tree by --fingerprint.
+MAX_FINGERPRINT_ENTRIES=50000
+# Record fields, in characters, matching the slices the emitting jq applies.
+# Capping here is what bounds the records file, which that jq reads whole;
+# the slices there remain the wire contract.
+MAX_PATH_CHARS=4096
+MAX_TEXT_CHARS=512
+MAX_EXT_CHARS=64
+MAX_SLOT_CHARS=16
+MAX_SLOTS_CHARS=512
+# Total records file. Producing more than the reader accepts is wasted work:
+# Library.js SCAN_LIMITS.maxTotalBytes refuses a library past this size.
+MAX_RECORDS_CHARS=$((64 * 1024 * 1024))
+
+# Whole-process deadline. The loops below watch SECONDS and stop cleanly, but
+# a shell blocked in find or jq on an unresponsive path never reaches a loop
+# boundary to look -- so the hard bound owns the process instead of living
+# inside it. Re-exec once under timeout, which runs us in its own process
+# group and so reaps a wedged child along with us. The grace period lets the
+# clean stop win whenever the shell is still making progress. Without
+# coreutils timeout only the soft checks apply.
+if [[ -z ${OMARCHY_ARCADE_SCAN_TIMED:-} ]] && command -v timeout >/dev/null; then
+  export OMARCHY_ARCADE_SCAN_TIMED=1
+  exec timeout -k 5s "$((DEADLINE + 5))s" "$BASH" "${BASH_SOURCE[0]}" "$@"
+fi
+SECONDS=0
+
+past_deadline() {
+  (( SECONDS >= DEADLINE ))
+}
+
+# Temp files are cleaned up on the way out however the scan ends, including
+# the TERM the deadline delivers.
+cleanup() {
+  rm -f "${RECORDS_FILE:-}" "${ADDED_TMP:-}"
+}
+trap cleanup EXIT
+trap 'die "scan exceeded its ${DEADLINE}s deadline"' TERM
 
 # Reported rather than fatal: a machine without RetroArch is a machine that
 # has not installed it yet, and the panel offers Omarchy's installer instead
@@ -31,7 +107,10 @@ if command -v retroarch >/dev/null; then RETROARCH_PRESENT=true; else RETROARCH_
 ra_cfg() {
   local key="$1" fallback="$2" value=""
   if [[ -f $RA_CFG ]]; then
-    value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*$/\1/p" "$RA_CFG" | tail -n1)
+    # Only the first MAX_CFG_BYTES: a larger file is not a config, and sed
+    # would otherwise read all of it once per key.
+    value=$(head -c "$MAX_CFG_BYTES" "$RA_CFG" 2>/dev/null \
+      | sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*$/\1/p" | tail -n1)
   fi
   [[ -n $value ]] || value="$fallback"
   value="${value/#:/$RA_CONFIG_DIR}"
@@ -57,8 +136,15 @@ declare -A EXT_CANDIDATES EXT_CHOICE CORE_SYSTEM
 
 load_cores() {
   local raw
-  raw=$("$(dirname "${BASH_SOURCE[0]}")/omarchy-arcade-cores" list 2>/dev/null) || return 1
+  # The helper's output is held whole here and handed to jq as --argjson
+  # below, so it is bounded on the way in. A document cut off at the cap is
+  # not JSON: refuse it outright rather than pass a truncated --argjson to
+  # the emitting jq, which would fail the entire scan instead of costing the
+  # core map it came from.
+  raw=$("$(dirname "${BASH_SOURCE[0]}")/omarchy-arcade-cores" list 2>/dev/null \
+    | head -c "$MAX_JSON_BYTES") || return 1
   [[ -n $raw ]] || return 1
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$raw" || return 1
 
   local ext ids
   while IFS=$'\t' read -r ext ids; do
@@ -107,13 +193,34 @@ core_path_for() {
 }
 
 # Index save states by ROM basename and core directory.
-declare -A STATE_SLOT STATE_MTIME STATE_THUMB STATE_SLOTS
+declare -A STATE_SLOT STATE_MTIME STATE_THUMB STATE_SLOTS STATE_SLOT_COUNT
 
+# The save-state tree is the largest thing a scan walks and the one a user
+# can grow without limit, so the walk is bounded three ways: how deep it
+# descends, how many entries it accepts, and how long it may take. Stopping
+# early costs the states past the cap -- which is a truncated Continue row,
+# not a failed scan -- so it reports on stderr and carries on.
 index_states() {
   [[ -d $SAVESTATE_DIR ]] || return 0
 
-  local f fname base slot mtime relative state_core key
-  while IFS= read -r -d '' f; do
+  local f fname base slot mtime relative state_core key seen=0
+  # find reports the mtime itself: a stat per entry is a fork per entry, and
+  # at the file counts this cap still allows that fork is the whole cost of
+  # the walk. Fields join on the unit separator rather than a tab, because
+  # tab is IFS whitespace and read would collapse a filename containing one;
+  # entries stay NUL-delimited for filenames containing newlines.
+  while IFS=$'\x1f' read -r -d '' mtime f; do
+    if (( seen >= MAX_STATE_FILES )); then
+      warn "reached the $MAX_STATE_FILES-file save-state limit under $SAVESTATE_DIR"
+      break
+    fi
+    if past_deadline; then
+      warn "stopped indexing save states at the ${DEADLINE}s deadline"
+      break
+    fi
+    seen=$((seen + 1))
+    [[ $mtime =~ ^[0-9]+$ ]] || continue
+
     fname="${f##*/}"
     # `.state.png` is the thumbnail beside a state, not a state itself.
     [[ $fname == *.png ]] && continue
@@ -138,17 +245,22 @@ index_states() {
       state_core=""
     fi
     key="$state_core|$base"
-    mtime=$(stat -c %Y "$f" 2>/dev/null) || continue
     # Every slot is remembered, not only the newest: the inspector lets the
     # user resume a chosen one. Pairs collect as "slot:mtime"; newest_state
-    # sorts them for emission.
-    STATE_SLOTS[$key]+="${slot}:${mtime}"$'\n'
+    # sorts them for emission. Past MAX_STATE_SLOTS the list stops growing
+    # while the winner below keeps updating, so a game carrying a
+    # pathological number of states still resumes the right one.
+    if (( ${STATE_SLOT_COUNT[$key]:-0} < MAX_STATE_SLOTS )); then
+      STATE_SLOTS[$key]+="${slot}:${mtime}"$'\n'
+      STATE_SLOT_COUNT[$key]=$(( ${STATE_SLOT_COUNT[$key]:-0} + 1 ))
+    fi
     if [[ -z ${STATE_MTIME[$key]:-} ]] || (( mtime > ${STATE_MTIME[$key]} )); then
       STATE_MTIME[$key]=$mtime
       STATE_SLOT[$key]=$slot
       if [[ -f "$f.png" ]]; then STATE_THUMB[$key]="$f.png"; else STATE_THUMB[$key]=""; fi
     fi
-  done < <(find "$SAVESTATE_DIR" -type f -print0 2>/dev/null)
+  done < <(find "$SAVESTATE_DIR" -maxdepth "$MAX_STATE_DEPTH" -type f \
+    -printf '%Ts\037%p\0' 2>/dev/null)
 }
 
 # "slot<TAB>mtime<TAB>thumbnail<TAB>slots" in STATE_INFO for a ROM, or
@@ -196,10 +308,26 @@ boxart_for() {
   return 1
 }
 
+# A state document into STATE_JSON, or "{}" when it is missing, unparseable,
+# or too large to be one. Both files are read whole -- by jq here and as an
+# --argjson there -- so the size check comes before the read, not after it.
+read_state_json() {
+  STATE_JSON="{}"
+  local file="$1" bytes
+  [[ -f $file ]] || return 0
+  bytes=$(stat -c %s "$file" 2>/dev/null) || return 0
+  if (( bytes > MAX_JSON_BYTES )); then
+    warn "ignored $file: larger than $MAX_JSON_BYTES bytes"
+    return 0
+  fi
+  STATE_JSON=$(jq -c 'if type == "object" then . else {} end' "$file" 2>/dev/null) \
+    || STATE_JSON="{}"
+  [[ -n $STATE_JSON ]] || STATE_JSON="{}"
+}
+
 emit_games() {
   local playlist_count=0
   RECORDS_FILE=$(mktemp -t omarchy-arcade-scan-XXXXXX.jsonl) || die "could not create scan records"
-  trap 'rm -f "$RECORDS_FILE" "${ADDED_TMP:-}"' EXIT
 
   # One enumeration at a time. The panel and the overlay each run this
   # script, and overlapping invocations used to race through the same
@@ -208,7 +336,10 @@ emit_games() {
   # instead of inventing an exit-code contract for "another scan won".
   mkdir -p "$STATE_DIR" || die "could not create state directory"
   exec 9>>"$STATE_DIR/.scan.lock"
-  flock 9
+  # Bounded: waiting is the right answer to a scan that is running, but not
+  # to one that is wedged, and the deadline covers the wait as much as the
+  # work it is waiting for.
+  flock -w "$DEADLINE" 9 || die "gave up waiting ${DEADLINE}s for another scan to finish"
 
   index_states
   load_cores || true
@@ -217,8 +348,21 @@ emit_games() {
   # (path, label, core hint, pinned core) -- forking jq per ROM made a
   # 400-game scan spend seconds in process spawns alone.
   if [[ -d $PLAYLIST_DIR ]]; then
-    local lpl
+    local lpl seen_playlists=0 lpl_bytes
     while IFS= read -r -d '' lpl; do
+      if (( seen_playlists >= MAX_PLAYLISTS )); then
+        warn "reached the $MAX_PLAYLISTS-playlist limit in $PLAYLIST_DIR"
+        break
+      fi
+      seen_playlists=$((seen_playlists + 1))
+      # jq parses a playlist whole, so an oversized one is skipped rather
+      # than read: its cost is paid before any cap on what it produces could
+      # apply.
+      lpl_bytes=$(stat -c %s "$lpl" 2>/dev/null) || continue
+      if (( lpl_bytes > MAX_JSON_BYTES )); then
+        warn "skipped $lpl: larger than $MAX_JSON_BYTES bytes"
+        continue
+      fi
       local db="${lpl##*/}"
       # A malformed playlist should cost its own entries, not the whole scan:
       # jq failing to parse, or the file not holding an object with an items
@@ -226,6 +370,17 @@ emit_games() {
       local rom label core_hint playlist_core ext core
       while IFS= read -r -d '' rom && IFS= read -r -d '' label \
         && IFS= read -r -d '' core_hint && IFS= read -r -d '' playlist_core; do
+        # Both bounds leave the library short rather than fail it: what was
+        # collected up to here is a real answer, and the counts below still
+        # agree because a game that is never added is never counted.
+        if (( playlist_count >= MAX_GAMES )); then
+          warn "reached the $MAX_GAMES-game limit; the library is truncated"
+          break 2
+        fi
+        if past_deadline; then
+          warn "stopped reading playlists at the ${DEADLINE}s deadline"
+          break 2
+        fi
         # Ignore entries whose content file is missing.
         [[ -f $rom ]] || continue
 
@@ -252,15 +407,9 @@ emit_games() {
     done < <(find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -print0 2>/dev/null)
   fi
 
-  local plays_json="{}"
-  if [[ -f $PLAYS_FILE ]]; then
-    plays_json=$(jq -c 'if type == "object" then . else {} end' "$PLAYS_FILE" 2>/dev/null) || plays_json="{}"
-  fi
-
-  local added_json="{}"
-  if [[ -f $ADDED_FILE ]]; then
-    added_json=$(jq -c 'if type == "object" then . else {} end' "$ADDED_FILE" 2>/dev/null) || added_json="{}"
-  fi
+  local plays_json added_json
+  read_state_json "$PLAYS_FILE"; plays_json=$STATE_JSON
+  read_state_json "$ADDED_FILE"; added_json=$STATE_JSON
   local now
   now=$(date +%s)
 
@@ -429,6 +578,35 @@ add_game() {
   # Use the core system when the playlist has no system name.
   [[ -n $db ]] || db="${CORE_SYSTEM[$core_name]:-}"
 
+  # Cap each field as the record is written. The emitting jq slices these
+  # again on the way out and that stays the wire contract, but it reads the
+  # whole records file to do it: capping here is what bounds the file it
+  # reads. The count is in characters, so worst-case UTF-8 costs four times
+  # this in bytes -- still a hard bound, which is the point.
+  rom="${rom:0:MAX_PATH_CHARS}"
+  label="${label:0:MAX_TEXT_CHARS}"
+  db="${db:0:MAX_TEXT_CHARS}"
+  ext="${ext:0:MAX_EXT_CHARS}"
+  core="${core:0:MAX_PATH_CHARS}"
+  core_name="${core_name:0:MAX_TEXT_CHARS}"
+  art="${art:0:MAX_PATH_CHARS}"
+  slot="${slot:0:MAX_SLOT_CHARS}"
+  resume_art="${resume_art:0:MAX_PATH_CHARS}"
+  slots="${slots:0:MAX_SLOTS_CHARS}"
+  # A cut must not leave half a pair behind: fall back to the last complete
+  # "slot:mtime" rather than emit one the reader has to guess at.
+  if (( ${#slots} == MAX_SLOTS_CHARS )) && [[ $slots == *,* ]]; then
+    slots="${slots%,*}"
+  fi
+
+  RECORDS_CHARS=$(( RECORDS_CHARS + 12 + ${#rom} * 2 + ${#label} + ${#db}
+    + ${#ext} + ${#core} + ${#core_name} + ${#art} + ${#slot}
+    + ${#resume_at} + ${#resume_art} + ${#slots} ))
+  if (( RECORDS_CHARS > MAX_RECORDS_CHARS )); then
+    warn "reached the $MAX_RECORDS_CHARS-character record limit"
+    return 1
+  fi
+
   printf '%s\0' "$rom" "$label" "$db" "$ext" "$core" "$core_name" \
     "$rom" "$art" "$slot" "${resume_at:-0}" "$resume_art" "${slots:-}" >>"$RECORDS_FILE"
 }
@@ -449,6 +627,12 @@ add_game() {
 # periodic rescan picks it up anyway. Walking tens of thousands of thumbnail
 # files every poll was the dominant cold-cache cost.
 #
+# The walks are bounded exactly as the scan's own are -- same depth, same
+# entry caps, same traversal order -- so the signature covers precisely the
+# files a scan would read. A tree past those caps changes neither, which is
+# consistent rather than merely cheap: the poll cannot promise to notice a
+# change in files the scan itself never looks at.
+#
 # Polled rather than watched with inotify deliberately: inotify-tools is not
 # guaranteed to be installed, a recursive watch on a large tree can exhaust
 # the user's watch limit, and a long-lived monitor process is one more thing
@@ -457,11 +641,15 @@ fingerprint() {
   {
     printf 'playlist_directory=%s\nsavestate_directory=%s\nthumbnails_directory=%s\nlibretro_directory=%s\nlibretro_info_path=%s\n' \
       "$PLAYLIST_DIR" "$SAVESTATE_DIR" "$THUMBNAIL_DIR" "$CORE_DIR" "$INFO_DIR"
-    find "$SAVESTATE_DIR" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null
-    find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -printf '%T@\t%s\t%p\n' 2>/dev/null
-    find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' -printf '%T@\t%s\t%p\n' 2>/dev/null
-    find "$INFO_DIR" -maxdepth 1 -type f -name '*.info' -printf '%T@\t%s\t%p\n' 2>/dev/null
-    [[ -f $CORES_CONF ]] && { printf 'cores.conf\t'; cat "$CORES_CONF"; }
+    find "$SAVESTATE_DIR" -maxdepth "$MAX_STATE_DEPTH" -type f -printf '%T@\t%s\t%p\n' 2>/dev/null \
+      | head -n "$MAX_STATE_FILES"
+    find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -printf '%T@\t%s\t%p\n' 2>/dev/null \
+      | head -n "$MAX_PLAYLISTS"
+    find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' -printf '%T@\t%s\t%p\n' 2>/dev/null \
+      | head -n "$MAX_FINGERPRINT_ENTRIES"
+    find "$INFO_DIR" -maxdepth 1 -type f -name '*.info' -printf '%T@\t%s\t%p\n' 2>/dev/null \
+      | head -n "$MAX_FINGERPRINT_ENTRIES"
+    [[ -f $CORES_CONF ]] && { printf 'cores.conf\t'; head -c "$MAX_CFG_BYTES" "$CORES_CONF"; }
   } | sort | cksum | tr -d ' \n'
   printf '\n'
 }
@@ -487,6 +675,19 @@ The first-seen index line is consumed internally and never printed.
 
 Environment:
   RA_CONFIG_DIR    Override the RetroArch config directory
+
+Limits:
+  Every collection a scan builds is bounded while it is built, and the whole
+  process runs under a deadline, so a large or malformed RetroArch tree costs
+  a truncated scan and a note on stderr rather than unbounded work. The caps
+  below can be raised by exporting them; a value that is not a positive
+  integer is ignored, and there is no value that switches a cap off.
+
+  OMARCHY_ARCADE_MAX_STATE_FILES  save-state files indexed (20000)
+  OMARCHY_ARCADE_MAX_GAMES        games emitted (10000)
+  OMARCHY_ARCADE_MAX_JSON_BYTES   bytes read from any one JSON file (16777216)
+  OMARCHY_ARCADE_DEADLINE         seconds for the whole scan, including the
+                                  wait for another scan's lock (120)
 
 Config:
   ~/.config/omarchy/arcade/cores.conf   One "ext = core" per line, choosing

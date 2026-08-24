@@ -482,6 +482,89 @@ check "newly discovered games receive a newer added date" \
 check "adding another game does not rewrite an existing added date" \
   "$first_added" "$(jq '.games[] | select(.title == "Super Mario World") | .addedAt' <<<"$out")"
 
+# --- Bounds ------------------------------------------------------------------
+
+# Every collection the scanner builds is capped while it is built, so a large
+# or malformed RetroArch tree costs a truncated scan and a note on stderr
+# rather than unbounded CPU, memory and wall clock. Each cap is exercised by
+# lowering it to something a fixture can reach.
+
+bounded_scan() {
+  env RA_CONFIG_DIR="$FIXTURE/ra" \
+      XDG_STATE_HOME="$FIXTURE/state" \
+      XDG_CONFIG_HOME="$FIXTURE/config" \
+      "$@" "$SCAN"
+}
+
+capped=$(bounded_scan OMARCHY_ARCADE_MAX_GAMES=1 2>/dev/null)
+capped_status=$?
+check "a capped scan exits cleanly rather than failing" "0" "$capped_status"
+check "the game cap bounds the library" \
+  "1" "$(grep -c '"t":"game"' <<<"$capped")"
+check "a capped stream is still framed by a trailer" \
+  "trailer" "$(tail -n1 <<<"$capped" | jq -r '.t')"
+check "the header still counts exactly the games that follow" \
+  "1" "$(head -n1 <<<"$capped" | jq -r '.games')"
+check "the game cap says so on stderr" \
+  "true" "$(bounded_scan OMARCHY_ARCADE_MAX_GAMES=1 2>&1 >/dev/null \
+            | grep -qF 'reached the 1-game limit' && echo true || echo false)"
+
+# The save-state walk is the one a user can grow without limit, so it stops
+# at a file count instead of enumerating whatever is there.
+limited=$(bounded_scan OMARCHY_ARCADE_MAX_STATE_FILES=1 2>/dev/null)
+check "a capped save-state walk still produces a library" \
+  "trailer" "$(tail -n1 <<<"$limited" | jq -r '.t')"
+check "the save-state cap says so on stderr" \
+  "true" "$(bounded_scan OMARCHY_ARCADE_MAX_STATE_FILES=1 2>&1 >/dev/null \
+            | grep -qF 'save-state limit' && echo true || echo false)"
+
+# jq parses a playlist whole, so one larger than the input cap is skipped
+# before it is read -- and skipping it costs its own entries, not the scan.
+{ printf '{"items":['; head -c 200000 /dev/zero | tr '\0' ' '; printf ']}'; } \
+  >"$FIXTURE/ra/playlists/Huge.lpl"
+check "an oversized playlist is skipped rather than parsed" \
+  "true" "$(bounded_scan OMARCHY_ARCADE_MAX_JSON_BYTES=8192 2>&1 >/dev/null \
+            | grep -qF 'Huge.lpl' && echo true || echo false)"
+check "skipping an oversized playlist leaves the rest of the library" \
+  "true" "$(bounded_scan OMARCHY_ARCADE_MAX_JSON_BYTES=8192 2>/dev/null \
+            | collect_library | jq '[.games[].title] | contains(["Pinball"])')"
+rm -f "$FIXTURE/ra/playlists/Huge.lpl"
+
+# A cap that accepts zero is a cap a stray empty variable turns off, so an
+# override that is not a positive number falls back to the default.
+full_count=$(scan_lib | jq '.games | length')
+check "a zero cap override is ignored, not obeyed" \
+  "$full_count" \
+  "$(bounded_scan OMARCHY_ARCADE_MAX_GAMES=0 2>/dev/null | collect_library | jq '.games | length')"
+check "a non-numeric cap override is ignored, not obeyed" \
+  "$full_count" \
+  "$(bounded_scan OMARCHY_ARCADE_MAX_GAMES=nonsense 2>/dev/null | collect_library | jq '.games | length')"
+
+# The walk descends a bounded number of levels: RetroArch's deepest layout is
+# states/<core>/<content>/<file>, and a tree deeper than that is not followed
+# to the bottom by the scan -- nor, so the two stay consistent, by the
+# fingerprint that decides when to rescan.
+before_slot=$(scan_lib | jq -r '.games[] | select(.title == "Pinball") | .resumeSlot')
+before=$(fp)
+sleep 1
+mkdir -p "$FIXTURE/ra/states/Gambatte/deep/deeper/deepest"
+touch "$FIXTURE/ra/states/Gambatte/deep/deeper/deepest/Pinball.state9"
+check "a save state past the depth cap is not indexed" \
+  "$before_slot" \
+  "$(scan_lib | jq -r '.games[] | select(.title == "Pinball") | .resumeSlot')"
+check "a save state past the depth cap does not move the fingerprint" \
+  "$before" "$(fp)"
+
+# The deadline covers the wait for another scan's lock as well as the work:
+# a scan wedged holding it must not park every later caller forever.
+mkdir -p "$FIXTURE/state/omarchy-arcade"
+flock -x "$FIXTURE/state/omarchy-arcade/.scan.lock" -c 'sleep 3' &
+lock_holder=$!
+sleep 0.3
+bounded_scan OMARCHY_ARCADE_DEADLINE=1 >/dev/null 2>&1
+check "a scan gives up on a held lock instead of waiting on it forever" "1" "$?"
+wait "$lock_holder" 2>/dev/null
+
 # --- Concurrent scans ----------------------------------------------------------
 
 # The panel and the overlay each run this script. Overlapping invocations

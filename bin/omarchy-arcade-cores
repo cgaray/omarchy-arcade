@@ -23,6 +23,15 @@ die() {
 
 command -v jq >/dev/null || die "jq is required"
 
+# Both listings below fold one jq call per entry into an accumulator, so the
+# work grows with the square of what the directory happens to contain -- and
+# both directories are named by retroarch.cfg, which is the user's file. A
+# machine has tens of cores and a handful of choices; these caps are far
+# above that and exist only so a directory of junk cannot turn a scan, which
+# runs this on every rescan, into an unbounded fan-out of processes.
+MAX_CORES=512
+MAX_CHOICES=512
+
 ra_cfg() {
   local key="$1" fallback="$2" value=""
   if [[ -f $RA_CFG ]]; then
@@ -46,10 +55,15 @@ info_value() {
 # .info file is still listed -- it is installed and launchable -- it just has
 # no extensions to offer, so it never becomes an automatic candidate.
 list_cores() {
-  local so name info ext corename system display
+  local so name info ext corename system display seen=0
   local out="[]"
 
   while IFS= read -r so; do
+    if (( seen >= MAX_CORES )); then
+      echo "omarchy-arcade-cores: reached the $MAX_CORES-core limit in $CORE_DIR" >&2
+      break
+    fi
+    seen=$((seen + 1))
     name="$(basename "$so" .so)"
     info="$INFO_DIR/$name.info"
     ext=""; corename=""; system=""; display=""
@@ -87,8 +101,13 @@ read_choices() {
   local out="{}"
   [[ -f $CORES_CONF ]] || { printf '%s' "$out"; return; }
 
-  local line ext core
+  local line ext core seen=0
   while IFS= read -r line; do
+    if (( seen >= MAX_CHOICES )); then
+      echo "omarchy-arcade-cores: reached the $MAX_CHOICES-line limit in $CORES_CONF" >&2
+      break
+    fi
+    seen=$((seen + 1))
     line="${line%%#*}"
     [[ $line == *=* ]] || continue
     ext="$(tr -d '[:space:]' <<<"${line%%=*}" | tr '[:upper:]' '[:lower:]')"
