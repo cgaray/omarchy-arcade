@@ -12,10 +12,28 @@ CORE=""
 ROM=""
 SLOT=""
 
-die() {
+warn() {
   echo "omarchy-arcade-launch: $*" >&2
+}
+
+die() {
+  warn "$*"
   exit 1
 }
+
+# plays.json is read whole by jq when a session is recorded. The cap is
+# applied to the one stream jq parses rather than to a path sized separately
+# and reopened, so nothing can grow or be swapped between a check and the
+# read. Same ceiling, under the same name, as the scanner applies to this
+# file; a value that is not a positive integer is ignored rather than
+# obeyed, so a stray empty variable can never mean "unlimited".
+MAX_PLAYS_BYTES=$((16 * 1024 * 1024))
+if [[ ${OMARCHY_ARCADE_MAX_JSON_BYTES:-} =~ ^[1-9][0-9]*$ ]]; then
+  MAX_PLAYS_BYTES=$OMARCHY_ARCADE_MAX_JSON_BYTES
+fi
+# Waiting is the right answer to another launcher recording its session, not
+# to one that is wedged holding the lock.
+LOCK_WAIT=30
 
 usage() {
   cat <<USAGE
@@ -116,7 +134,8 @@ record_session() {
   # dropped the other session's stats.
   local tmp lock_fd=9
   exec {lock_fd}>"$STATE_DIR/.plays.lock" || return 0
-  if ! flock "$lock_fd"; then
+  if ! flock -w "$LOCK_WAIT" "$lock_fd"; then
+    warn "gave up waiting ${LOCK_WAIT}s to record this session"
     exec {lock_fd}>&-
     return 0
   fi
@@ -125,17 +144,27 @@ record_session() {
     exec {lock_fd}>&-
     return 0
   }
-  if jq \
+  # A capped read feeds jq directly. If the file is larger than the cap it
+  # arrives truncated and jq refuses it, which lands in the same branch as a
+  # corrupt one: this session goes unrecorded and the existing history is
+  # left exactly as it was. Overwriting it with what little parsed would
+  # reset every playtime the user has accumulated.
+  local elapsed=$(( ended - started ))
+  # A clock stepped backwards mid-session must not subtract from the total.
+  (( elapsed >= 0 )) || elapsed=0
+  if head -c "$MAX_PLAYS_BYTES" -- "$PLAYS_FILE" 2>/dev/null | jq \
     --arg key "$ROM" \
     --argjson lastPlayed "$ended" \
-    --argjson seconds "$(( ended - started ))" \
-    '.[$key] = {
-       lastPlayed: $lastPlayed,
-       seconds: ((.[$key].seconds // 0) + $seconds),
-       count: ((.[$key].count // 0) + 1)
-     }' "$PLAYS_FILE" >"$tmp" 2>/dev/null; then
+    --argjson seconds "$elapsed" \
+    'if type == "object" then . else empty end
+     | .[$key] = {
+         lastPlayed: $lastPlayed,
+         seconds: ((.[$key].seconds // 0) + $seconds),
+         count: ((.[$key].count // 0) + 1)
+       }' >"$tmp" 2>/dev/null && [[ -s $tmp ]]; then
     mv -f "$tmp" "$PLAYS_FILE"
   else
+    warn "left play history untouched: $PLAYS_FILE is unreadable, malformed, or larger than $MAX_PLAYS_BYTES bytes"
     rm -f "$tmp"
   fi
   exec {lock_fd}>&-

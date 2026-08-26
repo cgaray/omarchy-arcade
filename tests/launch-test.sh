@@ -88,8 +88,40 @@ FAKE_RETROARCH_SLEEP=0.4 run_launch >/dev/null 2>&1 & p2=$!
 wait "$p1" "$p2"
 check "overlapping launches both record their session" "$(( c0 + 2 ))" "$(plays_count)"
 
+# plays.json is read whole to be rewritten, so the read is capped -- and the
+# cap applies to the stream jq parses, not to a path sized separately. A file
+# past the cap arrives truncated and lands in the same branch as a corrupt
+# one: the session is dropped and the history on disk is left alone, because
+# overwriting it with whatever parsed would reset every recorded playtime.
+PLAYS="$FIXTURE/state/omarchy-arcade/plays.json"
+cp "$PLAYS" "$FIXTURE/plays.good"
+
+printf '{"broken": ' >"$PLAYS"
+before=$(cat "$PLAYS")
+run_launch >/dev/null 2>&1
+check "a malformed plays.json is left untouched rather than overwritten" \
+  "$before" "$(cat "$PLAYS")"
+
+printf 'null' >"$PLAYS"
+run_launch >/dev/null 2>&1
+check "a valid-but-wrong-type plays.json is left untouched" "null" "$(cat "$PLAYS")"
+
+{ head -c 200000 /dev/zero | tr '\0' ' '; printf '{}'; } >"$PLAYS"
+before=$(wc -c <"$PLAYS")
+OMARCHY_ARCADE_MAX_JSON_BYTES=8192 run_launch >/dev/null 2>&1
+check "an oversized plays.json is left untouched" "$before" "$(wc -c <"$PLAYS")"
+check "an oversized plays.json says why on stderr" \
+  "true" "$(OMARCHY_ARCADE_MAX_JSON_BYTES=8192 run_launch 2>&1 >/dev/null \
+            | grep -qF 'left play history untouched' \
+            && echo true || echo false)"
+
+cp "$FIXTURE/plays.good" "$PLAYS"
+before=$(plays_count)
+run_launch >/dev/null 2>&1
+check "recording resumes once the file is readable again" "$(( before + 1 ))" "$(plays_count)"
+
 if (( failures )); then
   echo "launch-test: $failures failed"
   exit 1
 fi
-echo "launch-test: 9 passed"
+echo "launch-test: 14 passed"
