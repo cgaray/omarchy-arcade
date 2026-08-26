@@ -310,19 +310,26 @@ boxart_for() {
 
 # A state document into STATE_JSON, or "{}" when it is missing, unparseable,
 # or too large to be one. Both files are read whole -- by jq here and as an
-# --argjson there -- so the size check comes before the read, not after it.
+# --argjson there -- so the read is capped.
+#
+# The cap is applied to the one stream jq parses, not to a file that merely
+# shared its name. Sizing a path with stat and then letting jq open it again
+# is two opens of a name, and anything that can write the directory can swap
+# what the name refers to in between -- so the ceiling would describe the
+# file that was measured while jq allocated for the one that replaced it.
+# Here there is a single open, and jq cannot receive a byte the cap did not
+# pass. A truncated document simply fails to parse, which is already how a
+# malformed one is handled.
 read_state_json() {
   STATE_JSON="{}"
-  local file="$1" bytes
+  local file="$1"
   [[ -f $file ]] || return 0
-  bytes=$(stat -c %s "$file" 2>/dev/null) || return 0
-  if (( bytes > MAX_JSON_BYTES )); then
-    warn "ignored $file: larger than $MAX_JSON_BYTES bytes"
-    return 0
+  STATE_JSON=$(head -c "$MAX_JSON_BYTES" -- "$file" 2>/dev/null \
+    | jq -c 'if type == "object" then . else {} end' 2>/dev/null) || STATE_JSON="{}"
+  if [[ -z $STATE_JSON ]]; then
+    warn "ignored $file: unreadable, malformed, or larger than $MAX_JSON_BYTES bytes"
+    STATE_JSON="{}"
   fi
-  STATE_JSON=$(jq -c 'if type == "object" then . else {} end' "$file" 2>/dev/null) \
-    || STATE_JSON="{}"
-  [[ -n $STATE_JSON ]] || STATE_JSON="{}"
 }
 
 emit_games() {
@@ -348,25 +355,20 @@ emit_games() {
   # (path, label, core hint, pinned core) -- forking jq per ROM made a
   # 400-game scan spend seconds in process spawns alone.
   if [[ -d $PLAYLIST_DIR ]]; then
-    local lpl seen_playlists=0 lpl_bytes
+    local lpl seen_playlists=0
     while IFS= read -r -d '' lpl; do
       if (( seen_playlists >= MAX_PLAYLISTS )); then
         warn "reached the $MAX_PLAYLISTS-playlist limit in $PLAYLIST_DIR"
         break
       fi
       seen_playlists=$((seen_playlists + 1))
-      # jq parses a playlist whole, so an oversized one is skipped rather
-      # than read: its cost is paid before any cap on what it produces could
-      # apply.
-      lpl_bytes=$(stat -c %s "$lpl" 2>/dev/null) || continue
-      if (( lpl_bytes > MAX_JSON_BYTES )); then
-        warn "skipped $lpl: larger than $MAX_JSON_BYTES bytes"
-        continue
-      fi
       local db="${lpl##*/}"
       # A malformed playlist should cost its own entries, not the whole scan:
       # jq failing to parse, or the file not holding an object with an items
-      # array, both fall through here as an empty stream.
+      # array, both fall through here as an empty stream. An oversized one
+      # arrives that way too -- jq reads a capped stream from a single open
+      # of the file rather than opening a path this loop measured earlier,
+      # so what was capped and what is parsed are the same bytes.
       local rom label core_hint playlist_core ext core
       while IFS= read -r -d '' rom && IFS= read -r -d '' label \
         && IFS= read -r -d '' core_hint && IFS= read -r -d '' playlist_core; do
@@ -403,7 +405,8 @@ emit_games() {
         | .items[]
         | select((.path // "") != "" and (.label // "") != "")
         | ((.path // "") + "\u0000" + (.label // "") + "\u0000"
-           + ((.core_path // "")) + "\u0000" + ($pc + "\u0000"))' "$lpl" 2>/dev/null)
+           + ((.core_path // "")) + "\u0000" + ($pc + "\u0000"))' 2>/dev/null \
+        < <(head -c "$MAX_JSON_BYTES" -- "$lpl" 2>/dev/null))
     done < <(find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -print0 2>/dev/null)
   fi
 

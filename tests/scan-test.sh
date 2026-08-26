@@ -518,17 +518,36 @@ check "the save-state cap says so on stderr" \
   "true" "$(bounded_scan OMARCHY_ARCADE_MAX_STATE_FILES=1 2>&1 >/dev/null \
             | grep -qF 'save-state limit' && echo true || echo false)"
 
-# jq parses a playlist whole, so one larger than the input cap is skipped
-# before it is read -- and skipping it costs its own entries, not the scan.
-{ printf '{"items":['; head -c 200000 /dev/zero | tr '\0' ' '; printf ']}'; } \
-  >"$FIXTURE/ra/playlists/Huge.lpl"
-check "an oversized playlist is skipped rather than parsed" \
-  "true" "$(bounded_scan OMARCHY_ARCADE_MAX_JSON_BYTES=8192 2>&1 >/dev/null \
-            | grep -qF 'Huge.lpl' && echo true || echo false)"
-check "skipping an oversized playlist leaves the rest of the library" \
+# jq parses a playlist whole, so the input cap bounds what reaches it. The
+# ceiling has to apply to the bytes jq actually parses, not to a file that
+# was measured under the same name earlier -- so the entry below is placed
+# past the cap in an otherwise valid playlist. If jq ever sees it, the cap
+# was applied to something other than the stream it read.
+{ printf '{"items":['
+  head -c 200000 /dev/zero | tr '\0' ' '
+  printf '{"path":"%s/roms/Pinball.gb","label":"Smuggled","core_path":"DETECT"}]}' "$FIXTURE"
+} >"$FIXTURE/ra/playlists/Huge.lpl"
+check "content past the input cap never reaches the parser" \
+  "0" "$(bounded_scan OMARCHY_ARCADE_MAX_JSON_BYTES=8192 2>/dev/null \
+         | collect_library | jq '[.games[] | select(.title == "Smuggled")] | length')"
+check "an oversized playlist costs its own entries, not the library" \
   "true" "$(bounded_scan OMARCHY_ARCADE_MAX_JSON_BYTES=8192 2>/dev/null \
             | collect_library | jq '[.games[].title] | contains(["Pinball"])')"
 rm -f "$FIXTURE/ra/playlists/Huge.lpl"
+
+# The same for a state document: it is read whole and handed to jq as an
+# --argjson, so an oversized one falls back to the empty object rather than
+# being parsed.
+cp "$FIXTURE/state/omarchy-arcade/added.json" "$FIXTURE/added.bak"
+{ head -c 200000 /dev/zero | tr '\0' ' '; printf '{"a":1}'; } \
+  >"$FIXTURE/state/omarchy-arcade/added.json"
+check "an oversized state document is not parsed" \
+  "true" "$(bounded_scan OMARCHY_ARCADE_MAX_JSON_BYTES=8192 2>&1 >/dev/null \
+            | grep -qF 'added.json' && echo true || echo false)"
+check "an oversized state document still leaves a usable library" \
+  "trailer" "$(bounded_scan OMARCHY_ARCADE_MAX_JSON_BYTES=8192 2>/dev/null \
+               | tail -n1 | jq -r '.t')"
+cp "$FIXTURE/added.bak" "$FIXTURE/state/omarchy-arcade/added.json"
 
 # A cap that accepts zero is a cap a stray empty variable turns off, so an
 # override that is not a positive number falls back to the default.
