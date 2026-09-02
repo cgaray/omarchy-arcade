@@ -15,6 +15,7 @@ set -uo pipefail
 RA_CONFIG_DIR="${RA_CONFIG_DIR:-$HOME/.config/retroarch}"
 RA_CFG="$RA_CONFIG_DIR/retroarch.cfg"
 CORES_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/arcade/cores.conf"
+READ_HELPER="$(dirname "${BASH_SOURCE[0]}")/../lib/omarchy-arcade-read"
 
 die() {
   echo "omarchy-arcade-cores: $*" >&2
@@ -22,6 +23,7 @@ die() {
 }
 
 command -v jq >/dev/null || die "jq is required"
+command -v perl >/dev/null || die "perl is required"
 
 # Both listings below fold one jq call per entry into an accumulator, so the
 # work grows with the square of what the directory happens to contain -- and
@@ -40,11 +42,13 @@ MAX_CHOICES=512
 MAX_CFG_BYTES=$((1024 * 1024))
 MAX_INFO_BYTES=$((1024 * 1024))
 MAX_INFO_LINES=4096
+MAX_INFO_VALUE_CHARS=4096
+CORES_LOCK_WAIT=30
 
 ra_cfg() {
   local key="$1" fallback="$2" value=""
   if [[ -f $RA_CFG ]]; then
-    value=$(head -c "$MAX_CFG_BYTES" -- "$RA_CFG" 2>/dev/null \
+    value=$("$READ_HELPER" "$MAX_CFG_BYTES" "$RA_CFG" 2>/dev/null \
       | sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*$/\1/p" | tail -n1)
   fi
   [[ -n $value ]] || value="$fallback"
@@ -70,14 +74,14 @@ read_info() {
     (( lines < MAX_INFO_LINES )) || break
     lines=$((lines + 1))
     [[ $line =~ ^[[:space:]]*([A-Za-z_]+)[[:space:]]*=[[:space:]]*\"(.*)\"[[:space:]]*$ ]] || continue
-    key="${BASH_REMATCH[1]}"; value="${BASH_REMATCH[2]}"
+    key="${BASH_REMATCH[1]}"; value="${BASH_REMATCH[2]:0:MAX_INFO_VALUE_CHARS}"
     case $key in
       supported_extensions) [[ -n $INFO_EXT ]] || INFO_EXT="$value" ;;
       corename) [[ -n $INFO_CORENAME ]] || INFO_CORENAME="$value" ;;
       systemname) [[ -n $INFO_SYSTEM ]] || INFO_SYSTEM="$value" ;;
       display_name) [[ -n $INFO_DISPLAY ]] || INFO_DISPLAY="$value" ;;
     esac
-  done < <(head -c "$MAX_INFO_BYTES" -- "$1" 2>/dev/null)
+  done < <("$READ_HELPER" "$MAX_INFO_BYTES" "$1" 2>/dev/null)
 }
 
 # Every installed core, with what RetroArch says it opens. A core with no
@@ -87,7 +91,7 @@ list_cores() {
   local so name info ext corename system display seen=0
   local out="[]"
 
-  while IFS= read -r so; do
+  while IFS= read -r -d '' so; do
     if (( seen >= MAX_CORES )); then
       echo "omarchy-arcade-cores: reached the $MAX_CORES-core limit in $CORE_DIR" >&2
       break
@@ -119,7 +123,8 @@ list_cores() {
         displayName: (if $display == "" then $corename else $display end),
         extensions: ($ext | if . == "" then [] else split("|") end | map(ascii_downcase) | unique)
       }]')
-  done < <(find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' 2>/dev/null | sort)
+  done < <(find "$CORE_DIR" -maxdepth 1 -type f -name '*_libretro.so' -print0 2>/dev/null \
+    | head -z -n $((MAX_CORES + 1)))
 
   printf '%s' "$out"
 }
@@ -142,7 +147,7 @@ read_choices() {
     core="$(tr -d '[:space:]' <<<"${line#*=}")"
     [[ -n $ext && -n $core ]] || continue
     out=$(jq -c --argjson acc "$out" --arg e "$ext" --arg c "$core" -n '$acc + {($e): $c}')
-  done < <(head -c "$MAX_CFG_BYTES" -- "$CORES_CONF" 2>/dev/null)
+  done < <("$READ_HELPER" "$MAX_CFG_BYTES" "$CORES_CONF" 2>/dev/null)
   printf '%s' "$out"
 }
 
@@ -178,7 +183,9 @@ emit_list() {
 read_conf_body() {
   CONF_BODY=""
   [[ -f $CORES_CONF ]] || return 0
-  CONF_BODY=$(head -c $((MAX_CFG_BYTES + 1)) -- "$CORES_CONF" 2>/dev/null)
+  if ! CONF_BODY=$("$READ_HELPER" $((MAX_CFG_BYTES + 1)) "$CORES_CONF" 2>/dev/null); then
+    die "cores.conf is unreadable; refusing to rewrite it"
+  fi
   if (( $(printf '%s' "$CONF_BODY" | wc -c) > MAX_CFG_BYTES )); then
     die "cores.conf is larger than $MAX_CFG_BYTES bytes; refusing to rewrite it"
   fi
@@ -193,7 +200,8 @@ set_choice() {
   [[ -f "$CORE_DIR/${core}_libretro.so" ]] || die "core is not installed: $core"
 
   mkdir -p "$(dirname "$CORES_CONF")"
-  [[ -f $CORES_CONF ]] || printf '# Which core opens which extension. Written by Arcade.\n' >"$CORES_CONF"
+  exec {CORES_LOCK_FD}>"$CORES_CONF.lock" || die "could not open cores lock"
+  flock -w "$CORES_LOCK_WAIT" "$CORES_LOCK_FD" || die "gave up waiting ${CORES_LOCK_WAIT}s for cores.conf"
 
   # Rewrite through a temp file so an interrupted write cannot truncate the
   # user's other choices. The temp file lives beside CORES_CONF so the final
@@ -201,21 +209,31 @@ set_choice() {
   read_conf_body
   local tmp
   tmp=$(mktemp "$(dirname "$CORES_CONF")/.cores-XXXXXX") || die "could not create temp file"
-  grep -vE "^[[:space:]]*${ext}[[:space:]]*=" <<<"$CONF_BODY" >"$tmp" 2>/dev/null
+  if [[ -n $CONF_BODY ]]; then
+    grep -vE "^[[:space:]]*${ext}[[:space:]]*=" <<<"$CONF_BODY" >"$tmp" 2>/dev/null
+  else
+    printf '# Which core opens which extension. Written by Arcade.\n' >"$tmp"
+  fi
   printf '%s = %s\n' "$ext" "$core" >>"$tmp"
   mv -f "$tmp" "$CORES_CONF"
+  exec {CORES_LOCK_FD}>&-
   echo "ok"
 }
 
 unset_choice() {
   local ext="$1"
   ext="$(tr '[:upper:]' '[:lower:]' <<<"$ext")"
-  [[ -f $CORES_CONF ]] || { echo "ok"; return; }
+  [[ $ext =~ ^[a-z0-9]+$ ]] || die "invalid extension: $ext"
+  mkdir -p "$(dirname "$CORES_CONF")"
+  exec {CORES_LOCK_FD}>"$CORES_CONF.lock" || die "could not open cores lock"
+  flock -w "$CORES_LOCK_WAIT" "$CORES_LOCK_FD" || die "gave up waiting ${CORES_LOCK_WAIT}s for cores.conf"
+  [[ -f $CORES_CONF ]] || { exec {CORES_LOCK_FD}>&-; echo "ok"; return; }
   read_conf_body
   local tmp
   tmp=$(mktemp "$(dirname "$CORES_CONF")/.cores-XXXXXX") || die "could not create temp file"
   grep -vE "^[[:space:]]*${ext}[[:space:]]*=" <<<"$CONF_BODY" >"$tmp" 2>/dev/null
   mv -f "$tmp" "$CORES_CONF"
+  exec {CORES_LOCK_FD}>&-
   echo "ok"
 }
 

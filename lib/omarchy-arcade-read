@@ -1,0 +1,29 @@
+#!/usr/bin/perl
+
+# Read at most the requested number of bytes from one regular file. Opening
+# the path with these flags prevents a replaceable input from becoming a
+# symlink or FIFO between the caller's existence check and the read.
+use strict;
+use warnings;
+use Fcntl qw(O_RDONLY O_NOFOLLOW O_NONBLOCK);
+use POSIX qw(S_ISREG);
+
+my ($limit, $path) = @ARGV;
+die "usage: omarchy-arcade-read <bytes> <path>\n"
+  unless defined $limit && defined $path && $limit =~ /^[1-9][0-9]*$/;
+
+sysopen(my $file, $path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+  or die "open failed\n";
+my @stat = stat($file);
+die "not a regular file\n" unless @stat && S_ISREG($stat[2]);
+
+my $remaining = 0 + $limit;
+while ($remaining > 0) {
+    my $want = $remaining < 65536 ? $remaining : 65536;
+    my $read = sysread($file, my $chunk, $want);
+    die "read failed\n" unless defined $read;
+    last if $read == 0;
+    print STDOUT $chunk or die "write failed\n";
+    $remaining -= $read;
+}
+close($file) or die "close failed\n";

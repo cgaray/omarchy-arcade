@@ -7,10 +7,14 @@ set -uo pipefail
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-arcade"
 PLAYS_FILE="$STATE_DIR/plays.json"
 RETROARCH_CMD="${RETROARCH_CMD:-retroarch}"
+READ_HELPER="$(dirname "${BASH_SOURCE[0]}")/../lib/omarchy-arcade-read"
 
 CORE=""
 ROM=""
 SLOT=""
+SIGNAL_GRACE=5
+signal_sent=0
+signal_deadline=0
 
 warn() {
   echo "omarchy-arcade-launch: $*" >&2
@@ -31,6 +35,7 @@ MAX_PLAYS_BYTES=$((16 * 1024 * 1024))
 if [[ ${OMARCHY_ARCADE_MAX_JSON_BYTES:-} =~ ^[1-9][0-9]*$ ]]; then
   MAX_PLAYS_BYTES=$OMARCHY_ARCADE_MAX_JSON_BYTES
 fi
+command -v perl >/dev/null || die "perl is required"
 # Waiting is the right answer to another launcher recording its session, not
 # to one that is wedged holding the lock.
 LOCK_WAIT=30
@@ -97,6 +102,8 @@ trap cleanup_cfg EXIT
 # signal on and keep waiting so the launcher's status remains RetroArch's own.
 # shellcheck disable=SC2317,SC2329
 forward_signal() {
+  signal_sent=1
+  signal_deadline=$((SECONDS + SIGNAL_GRACE))
   [[ -n ${ra_pid:-} ]] && kill -s "$1" "$ra_pid" 2>/dev/null
   return 0
 }
@@ -111,11 +118,19 @@ ra_pid=$!
 wait "$ra_pid"
 status=$?
 # An interrupted wait returns >128 while the child may still be running;
-# block until it is really gone so status is RetroArch's own.
-while kill -0 "$ra_pid" 2>/dev/null; do
+# poll until it is really gone so a child that ignores a forwarded signal can
+# be escalated without leaving the launcher blocked in a second wait.
+if kill -0 "$ra_pid" 2>/dev/null; then
+  while kill -0 "$ra_pid" 2>/dev/null; do
+    if (( signal_sent && SECONDS >= signal_deadline )); then
+      kill -KILL "$ra_pid" 2>/dev/null || true
+      signal_sent=0
+    fi
+    sleep 0.1
+  done
   wait "$ra_pid"
   status=$?
-done
+fi
 ended=$(date +%s)
 
 record_session() {
@@ -123,7 +138,6 @@ record_session() {
   # so an interrupted write cannot leave a truncated plays.json behind, which
   # would silently reset every playtime the user has accumulated.
   mkdir -p "$STATE_DIR"
-  [[ -f $PLAYS_FILE ]] || printf '{}\n' >"$PLAYS_FILE"
 
   # Temp file lives beside plays.json so the final mv is a rename -- a /tmp
   # tempfile would make this a cross-filesystem copy, which is exactly the
@@ -140,6 +154,18 @@ record_session() {
     return 0
   fi
 
+  # Create a missing history file through a destination-local temp file. A
+  # symlink or FIFO already at this path is left for the safe reader to reject;
+  # mv never follows the final path component.
+  if [[ ! -e $PLAYS_FILE && ! -L $PLAYS_FILE ]]; then
+    local initial
+    initial=$(mktemp "$STATE_DIR/.plays-XXXXXX.json") || {
+      exec {lock_fd}>&-
+      return 0
+    }
+    printf '{}\n' >"$initial" && mv -f "$initial" "$PLAYS_FILE" || rm -f "$initial"
+  fi
+
   tmp=$(mktemp "$STATE_DIR/.plays-XXXXXX.json") || {
     exec {lock_fd}>&-
     return 0
@@ -152,7 +178,7 @@ record_session() {
   local elapsed=$(( ended - started ))
   # A clock stepped backwards mid-session must not subtract from the total.
   (( elapsed >= 0 )) || elapsed=0
-  if head -c "$MAX_PLAYS_BYTES" -- "$PLAYS_FILE" 2>/dev/null | jq \
+  if "$READ_HELPER" "$MAX_PLAYS_BYTES" "$PLAYS_FILE" 2>/dev/null | jq \
     --arg key "$ROM" \
     --argjson lastPlayed "$ended" \
     --argjson seconds "$elapsed" \

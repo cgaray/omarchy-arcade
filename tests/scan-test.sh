@@ -8,6 +8,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCAN="$HERE/../bin/omarchy-arcade-scan"
+CORES="$HERE/../bin/omarchy-arcade-cores"
 
 failures=0
 passed=0
@@ -240,6 +241,14 @@ LPL
 out=$(scan_lib)
 check "cores.conf can claim an ambiguous extension" \
   "snes9x" "$(jq -r '.games[] | select(.title == "arcade-set") | .coreName' <<<"$out")"
+
+before=$(cat "$FIXTURE/config/omarchy/arcade/cores.conf")
+unset_status=0
+RA_CONFIG_DIR="$FIXTURE/ra" XDG_CONFIG_HOME="$FIXTURE/config" \
+  "$CORES" unset '.*' >/dev/null 2>&1 || unset_status=$?
+check "unset rejects regular-expression extensions" "1" "$unset_status"
+check "rejected unset leaves cores.conf unchanged" "$before" \
+  "$(cat "$FIXTURE/config/omarchy/arcade/cores.conf")"
 
 # --- Playlist source ---------------------------------------------------------
 

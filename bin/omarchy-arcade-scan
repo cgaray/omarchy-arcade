@@ -14,6 +14,7 @@ INFO_DIR=""
 RECORDS_FILE=""
 ADDED_TMP=""
 RECORDS_CHARS=0
+READ_HELPER="$(dirname "${BASH_SOURCE[0]}")/../lib/omarchy-arcade-read"
 
 warn() {
   echo "omarchy-arcade-scan: $*" >&2
@@ -25,6 +26,7 @@ die() {
 }
 
 command -v jq >/dev/null || die "jq is required"
+command -v perl >/dev/null || die "perl is required"
 
 # Bounds, applied while a collection is built rather than after it exists.
 #
@@ -109,7 +111,7 @@ ra_cfg() {
   if [[ -f $RA_CFG ]]; then
     # Only the first MAX_CFG_BYTES: a larger file is not a config, and sed
     # would otherwise read all of it once per key.
-    value=$(head -c "$MAX_CFG_BYTES" "$RA_CFG" 2>/dev/null \
+    value=$("$READ_HELPER" "$MAX_CFG_BYTES" "$RA_CFG" 2>/dev/null \
       | sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*$/\1/p" | tail -n1)
   fi
   [[ -n $value ]] || value="$fallback"
@@ -324,7 +326,7 @@ read_state_json() {
   STATE_JSON="{}"
   local file="$1"
   [[ -f $file ]] || return 0
-  STATE_JSON=$(head -c "$MAX_JSON_BYTES" -- "$file" 2>/dev/null \
+  STATE_JSON=$("$READ_HELPER" "$MAX_JSON_BYTES" "$file" 2>/dev/null \
     | jq -c 'if type == "object" then . else {} end' 2>/dev/null) || STATE_JSON="{}"
   if [[ -z $STATE_JSON ]]; then
     warn "ignored $file: unreadable, malformed, or larger than $MAX_JSON_BYTES bytes"
@@ -406,7 +408,7 @@ emit_games() {
         | select((.path // "") != "" and (.label // "") != "")
         | ((.path // "") + "\u0000" + (.label // "") + "\u0000"
            + ((.core_path // "")) + "\u0000" + ($pc + "\u0000"))' 2>/dev/null \
-        < <(head -c "$MAX_JSON_BYTES" -- "$lpl" 2>/dev/null))
+         < <("$READ_HELPER" "$MAX_JSON_BYTES" "$lpl" 2>/dev/null))
     done < <(find "$PLAYLIST_DIR" -maxdepth 1 -type f -name '*.lpl' -print0 2>/dev/null)
   fi
 
@@ -652,7 +654,7 @@ fingerprint() {
       | head -n "$MAX_FINGERPRINT_ENTRIES"
     find "$INFO_DIR" -maxdepth 1 -type f -name '*.info' -printf '%T@\t%s\t%p\n' 2>/dev/null \
       | head -n "$MAX_FINGERPRINT_ENTRIES"
-    [[ -f $CORES_CONF ]] && { printf 'cores.conf\t'; head -c "$MAX_CFG_BYTES" "$CORES_CONF"; }
+    [[ -f $CORES_CONF ]] && { printf 'cores.conf\t'; "$READ_HELPER" "$MAX_CFG_BYTES" "$CORES_CONF" 2>/dev/null; }
   } | sort | cksum | tr -d ' \n'
   printf '\n'
 }

@@ -120,8 +120,15 @@ before=$(plays_count)
 run_launch >/dev/null 2>&1
 check "recording resumes once the file is readable again" "$(( before + 1 ))" "$(plays_count)"
 
+# A pre-existing symlink must not be followed while initializing history.
+rm -f "$PLAYS"
+ln -s "$FIXTURE/redirected" "$PLAYS"
+run_launch >/dev/null 2>&1
+check "history symlink is not followed during initialization" "true" \
+  "$([[ -L $PLAYS && ! -e $FIXTURE/redirected ]] && echo true || echo false)"
+
 if (( failures )); then
   echo "launch-test: $failures failed"
   exit 1
 fi
-echo "launch-test: 14 passed"
+echo "launch-test: 15 passed"

@@ -27,7 +27,7 @@ cover-art grid.
 
 - Omarchy Quattro
 - RetroArch with at least one installed libretro core
-- Bash and `jq`, included with Omarchy
+- Bash, `jq`, and Perl, included with Omarchy
 
 Arcade has no install hooks, bundled dependencies, network requests, or
 privileged setup.
