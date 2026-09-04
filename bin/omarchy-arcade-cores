@@ -200,7 +200,11 @@ set_choice() {
   [[ -f "$CORE_DIR/${core}_libretro.so" ]] || die "core is not installed: $core"
 
   mkdir -p "$(dirname "$CORES_CONF")"
-  exec {CORES_LOCK_FD}>"$CORES_CONF.lock" || die "could not open cores lock"
+  # Append, not truncate: bash redirection follows symlinks, so a '>' on this
+  # predictable path would empty whatever the link names. The fd is only ever
+  # flock'd, never written, so append mode costs nothing and leaves no
+  # truncation primitive behind for anything that can write this directory.
+  exec {CORES_LOCK_FD}>>"$CORES_CONF.lock" || die "could not open cores lock"
   flock -w "$CORES_LOCK_WAIT" "$CORES_LOCK_FD" || die "gave up waiting ${CORES_LOCK_WAIT}s for cores.conf"
 
   # Rewrite through a temp file so an interrupted write cannot truncate the
@@ -225,7 +229,11 @@ unset_choice() {
   ext="$(tr '[:upper:]' '[:lower:]' <<<"$ext")"
   [[ $ext =~ ^[a-z0-9]+$ ]] || die "invalid extension: $ext"
   mkdir -p "$(dirname "$CORES_CONF")"
-  exec {CORES_LOCK_FD}>"$CORES_CONF.lock" || die "could not open cores lock"
+  # Append, not truncate: bash redirection follows symlinks, so a '>' on this
+  # predictable path would empty whatever the link names. The fd is only ever
+  # flock'd, never written, so append mode costs nothing and leaves no
+  # truncation primitive behind for anything that can write this directory.
+  exec {CORES_LOCK_FD}>>"$CORES_CONF.lock" || die "could not open cores lock"
   flock -w "$CORES_LOCK_WAIT" "$CORES_LOCK_FD" || die "gave up waiting ${CORES_LOCK_WAIT}s for cores.conf"
   [[ -f $CORES_CONF ]] || { exec {CORES_LOCK_FD}>&-; echo "ok"; return; }
   read_conf_body

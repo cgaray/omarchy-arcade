@@ -60,6 +60,7 @@ step "architecture seam" node "$HERE/seam-test.js"
 step "library unit tests" node "$HERE/library-test.js"
 step "session unit tests" node "$HERE/session-test.js"
 step "launcher integration tests" bash "$HERE/launch-test.sh"
+step "cores integration tests" bash "$HERE/cores-test.sh"
 step "scanner integration tests" bash "$HERE/scan-test.sh"
 
 if (( status )); then

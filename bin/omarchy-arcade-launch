@@ -146,8 +146,12 @@ record_session() {
   # A lockfile serializes writers: two overlapping launches each performed an
   # unsynchronized read-modify-write, and whichever mv landed last silently
   # dropped the other session's stats.
+  #
+  # The lock fd is opened append-only. Bash redirection follows symlinks, so a
+  # truncating '>' on this predictable path would empty whatever the link
+  # names; the fd is only flock'd, never written, so append gives up nothing.
   local tmp lock_fd=9
-  exec {lock_fd}>"$STATE_DIR/.plays.lock" || return 0
+  exec {lock_fd}>>"$STATE_DIR/.plays.lock" || return 0
   if ! flock -w "$LOCK_WAIT" "$lock_fd"; then
     warn "gave up waiting ${LOCK_WAIT}s to record this session"
     exec {lock_fd}>&-

@@ -127,8 +127,18 @@ run_launch >/dev/null 2>&1
 check "history symlink is not followed during initialization" "true" \
   "$([[ -L $PLAYS && ! -e $FIXTURE/redirected ]] && echo true || echo false)"
 
+# The lock is opened, not written. Bash redirection follows symlinks, so a
+# truncating '>' here would empty whatever the lock path names.
+rm -f "$PLAYS"
+cp "$FIXTURE/plays.good" "$PLAYS"
+printf 'do not truncate me\n' >"$FIXTURE/lock-target"
+ln -sf "$FIXTURE/lock-target" "$FIXTURE/state/omarchy-arcade/.plays.lock"
+run_launch >/dev/null 2>&1
+check "lock symlink target is not truncated" "do not truncate me" \
+  "$(cat "$FIXTURE/lock-target")"
+
 if (( failures )); then
   echo "launch-test: $failures failed"
   exit 1
 fi
-echo "launch-test: 15 passed"
+echo "launch-test: 16 passed"
